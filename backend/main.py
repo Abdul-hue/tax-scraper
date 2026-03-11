@@ -5,19 +5,15 @@ import os
 
 app = FastAPI(title="Scraper API")
 
-# Ensure static directory exists
+# Ensure static directory exists for screenshots
 os.makedirs("static/screenshots", exist_ok=True)
 
-# Mount static folder to serve screenshots
+# Mount screenshots folder (served at /static/screenshots/<filename>)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Include the main routing file from the app folder
+# Include all API routes
 app.include_router(api_router)
-
-@app.get("/")
-async def root():
-    return {"message": "Welcome to Scraper API"}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=7887, reload=False)

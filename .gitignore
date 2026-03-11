@@ -17,7 +17,11 @@ backend/static/screenshots/*.png
 backend/output/
 /output/
 
-# Secrets / Config (Crucial!)
+# Secrets — NEVER commit these
 .env*
 .emv*
 *.local
+.env.deploy
+.emv.deploy
+backend/.env.deploy
+backend/.emv.deploy

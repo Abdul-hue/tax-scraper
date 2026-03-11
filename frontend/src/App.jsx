@@ -338,9 +338,9 @@ function App() {
                                 <Camera size={18} color="#58a6ff" />
                                 Live Result Screenshot
                             </h3>
-                            <a href={`http://localhost:8000${result.screenshot_path}`} target="_blank" rel="noreferrer">
+                            <a href={result.screenshot_path} target="_blank" rel="noreferrer">
                                 <img
-                                    src={`http://localhost:8000${result.screenshot_path}`}
+                                    src={result.screenshot_path}
                                     alt="Scraper Screenshot"
                                 />
                             </a>

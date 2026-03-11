@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  scraper:
+    image: "${IMAGE_NAME:-scraper-tool}"
+    container_name: "${IMAGE_NAME:-scraper-tool}"
+    ports:
+      - "${FRONTEND_PORT:-3412}:3412"
+      - "${BACKEND_PORT:-7887}:7887"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ${IMAGE_NAME:-scraper-tool}_screenshots:/app/static/screenshots
+    restart: unless-stopped
+
+volumes:
+  ${IMAGE_NAME:-scraper-tool}_screenshots:
