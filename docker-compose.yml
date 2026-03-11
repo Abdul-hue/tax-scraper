@@ -10,8 +10,8 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
     volumes:
-      - ${IMAGE_NAME:-scraper-tool}_screenshots:/app/static/screenshots
+      - scraper_screenshots:/app/static/screenshots
     restart: unless-stopped
 
 volumes:
-  ${IMAGE_NAME:-scraper-tool}_screenshots:
+  scraper_screenshots:
