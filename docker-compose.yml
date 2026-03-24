@@ -2,16 +2,26 @@ version: "3.9"
 
 services:
   scraper:
-    image: "${IMAGE_NAME:-scraper-tool}"
-    container_name: "${IMAGE_NAME:-scraper-tool}"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scraper-tool-production:latest
+    container_name: scraper-tool-production
     ports:
-      - "${FRONTEND_PORT:-3412}:3412"
-      - "${BACKEND_PORT:-7887}:7887"
+      - "3412:3412"   # Frontend (Nginx) - This is what users will access
+      - "7887:7887"   # Backend (FastAPI/uvi corn)
     environment:
       - PYTHONUNBUFFERED=1
+      - PORT=7887                  # Important: tells FastAPI to run on 7887 inside container
     volumes:
       - scraper_screenshots:/app/static/screenshots
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3412/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 volumes:
-  scraper_screenshots:
+    scraper_screenshots:
