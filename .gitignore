@@ -1,0 +1,14 @@
+﻿__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+backend/chrome_profile/
+backend/debug/
+backend/downloads/
+backend/output/
+backend/__pycache__/
+backend/scrapers/__pycache__/
+*.png
+node_modules/
+dist/
