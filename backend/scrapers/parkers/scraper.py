@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Optional
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-
+import re
 from .models import ParkersConfig, ParkersResult, ValuationPrices
+from ..common.browser import get_browser_args
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class ParkersScraper:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
                 headless=self.headless,
-                args=["--disable-blink-features=AutomationControlled"]
+                args=get_browser_args()
             )
             context = browser.new_context(
                 viewport={"width": 1280, "height": 900},
@@ -43,13 +44,28 @@ class ParkersScraper:
                 logger.info(f"Navigating to {VALUATION_URL}")
                 page.goto(VALUATION_URL, wait_until="domcontentloaded", timeout=10000)
                 
-                # Dismiss cookies if present
+                # Dismiss cookies / GDPR consent if present
                 try:
-                    page.wait_for_selector('button[id*="onetrust-accept"]', timeout=2000)
-                    page.click('button[id*="onetrust-accept"]', timeout=1000)
-                    logger.info("Cookies dismissed")
-                except:
-                    logger.info("No cookies button found")
+                    # 1. Check for OneTrust
+                    if page.locator('button[id*="onetrust-accept"]').is_visible(timeout=2000):
+                        page.click('button[id*="onetrust-accept"]', timeout=1000)
+                        logger.info("OneTrust cookies dismissed")
+                    
+                    # 2. Check for SourcePoint GDPR iframe
+                    consent_iframe = page.locator('iframe[id^="sp_message_iframe"]')
+                    if consent_iframe.is_visible(timeout=3000):
+                        logger.info("SourcePoint GDPR consent iframe detected")
+                        # Click the "Accept" or "OK" button inside the iframe
+                        # Common selectors for SourcePoint buttons: button[title="Accept"], button.sp_choice_type_11
+                        accept_btn = consent_iframe.content_frame.get_by_role("button", name=re.compile("Accept|OK|Agree", re.I))
+                        if accept_btn.is_visible(timeout=2000):
+                            accept_btn.click()
+                            logger.info("SourcePoint consent dismissed via button click")
+                        
+                        # Wait for overlay to disappear
+                        page.locator('div[id^="sp_message_container"]').wait_for(state="hidden", timeout=5000)
+                except Exception as e:
+                    logger.debug(f"Consent dismissal skipped or failed: {e}")
 
                 # Wait for the VRM input to appear
                 logger.info("Waiting for VRM input field...")

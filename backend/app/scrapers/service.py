@@ -305,6 +305,7 @@ async def run_idu_scraper_start(
             # Setup OTP sync mechanism
             scraper.otp_event = threading.Event()
             scraper.otp_value = {"code": ""}
+            scraper.session_id = sid  # Attach session_id for status communication
             active_idu_sessions[sid] = scraper
             
             # Start search (which will call _ensure_logged_in and wait for otp_event)
@@ -337,7 +338,7 @@ async def run_idu_scraper_start(
     )
     thread.start()
     
-    return {"session_id": session_id, "status": "awaiting_otp"}
+    return {"session_id": session_id, "status": "processing"}
 
 
 async def run_idu_scraper_submit_otp(session_id: str, otp: str):

@@ -2,9 +2,9 @@ import logging
 from datetime import datetime, timezone
 
 from playwright.sync_api import sync_playwright
-
 from .models import NationwideQuery, NationwideResult
 from .parser import parse_results
+from ..common.browser import get_browser_args
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +35,10 @@ class NationwideScraper:
 
         try:
             with sync_playwright() as p:
+                # Use common browser arguments for stability
                 browser = p.chromium.launch(
                     headless=self.headless,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                    ]
+                    args=get_browser_args()
                 )
                 context = browser.new_context(
                     user_agent=(

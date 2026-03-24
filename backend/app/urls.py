@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Query, HTTPException, Response
+from fastapi.responses import FileResponse, JSONResponse
 import os
+import json
 from app.auth.router import router as auth_router
 from app.core.router import router as core_router
 from app.scrapers.service import (
@@ -12,6 +13,12 @@ from app.scrapers.service import (
 )
 
 api_router = APIRouter()
+
+def scraper_response(result: dict) -> Response:
+    """Check for error in result and return 500 if present, else 200."""
+    if result.get("error"):
+        return JSONResponse(status_code=500, content=result)
+    return JSONResponse(status_code=200, content=result)
 
 # Include existing routers
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
@@ -46,7 +53,7 @@ async def get_tax_valuation(
     student_loan = urllib.parse.unquote(student_loan)
     tax_code = urllib.parse.unquote(tax_code)
 
-    return await run_tax_scraper(
+    result = await run_tax_scraper(
         salary=salary,
         period=period,
         tax_year=tax_year,
@@ -61,6 +68,7 @@ async def get_tax_valuation(
         blind=blind,
         no_ni=no_ni,
     )
+    return scraper_response(result)
 
 
 @api_router.get("/scrapers/counciltax", tags=["scrapers"])
@@ -68,7 +76,8 @@ async def get_council_tax(postcode: str):
     """
     Get council tax bands and amounts for a given postcode.
     """
-    return await run_counciltax_scraper(postcode=postcode)
+    result = await run_counciltax_scraper(postcode=postcode)
+    return scraper_response(result)
 
 
 @api_router.get("/scrapers/parkers", tags=["scrapers"])
@@ -76,7 +85,8 @@ async def get_car_valuation(plate: str):
     """
     Get car valuation from Parkers by registration plate.
     """
-    return await run_parkers_scraper(plate=plate)
+    result = await run_parkers_scraper(plate=plate)
+    return scraper_response(result)
 
 
 @api_router.get("/scrapers/nationwide", tags=["scrapers"])
@@ -92,7 +102,7 @@ async def get_house_price_index(
     """
     Get Nationwide House Price Index valuation change for a property.
     """
-    return await run_nationwide_scraper(
+    result = await run_nationwide_scraper(
         region=region,
         postcode=postcode,
         property_value=property_value,
@@ -101,6 +111,7 @@ async def get_house_price_index(
         to_year=to_year,
         to_quarter=to_quarter,
     )
+    return scraper_response(result)
 
 
 @api_router.get("/scrapers/lps", tags=["scrapers"])
@@ -117,7 +128,7 @@ async def get_lps_valuation(
 ):
     from app.scrapers.service import run_lps_scraper
 
-    return await run_lps_scraper(
+    result = await run_lps_scraper(
         search_type=search_type,
         postcode=postcode,
         property_number=property_number,
@@ -128,6 +139,7 @@ async def get_lps_valuation(
         property_id=property_id,
         max_pages=max_pages,
     )
+    return scraper_response(result)
 
 
 @api_router.get("/scrapers/landregistry", tags=["scrapers"])
@@ -144,7 +156,7 @@ async def landregistry_scraper(
     order_register: bool = True,
     order_title_plan: bool = True,
 ):
-    return await run_landregistry_scraper(
+    result = await run_landregistry_scraper(
         username=username,
         password=password,
         customer_reference=customer_reference,
@@ -157,6 +169,7 @@ async def landregistry_scraper(
         order_register=order_register,
         order_title_plan=order_title_plan,
     )
+    return scraper_response(result)
 
 
 @api_router.get("/scrapers/idu", tags=["scrapers"])
@@ -184,7 +197,7 @@ async def get_idu(
 ):
     from app.scrapers.service import run_idu_scraper
 
-    return await run_idu_scraper(
+    result = await run_idu_scraper(
         username=username,
         password=password,
         forename=forename,
@@ -206,6 +219,7 @@ async def get_idu(
         landline=landline,
         landline2=landline2,
     )
+    return scraper_response(result)
 
 
 @api_router.post("/scrapers/idu/start", tags=["scrapers"])

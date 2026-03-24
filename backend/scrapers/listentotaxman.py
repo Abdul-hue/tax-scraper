@@ -41,6 +41,7 @@ from typing import Literal, Optional
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import Page, TimeoutError as PWTimeout, sync_playwright
+from .common.browser import get_browser_args
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,7 @@ class ListenToTaxmanScraper:
         self._browser  = self._pw.chromium.launch(
             headless = headless,
             slow_mo  = slow_mo_ms,
-            args     = ["--no-sandbox", "--disable-dev-shm-usage"],
+            args     = get_browser_args(),
         )
         self._context  = self._browser.new_context(
             viewport       = {"width": 1440, "height": 900},

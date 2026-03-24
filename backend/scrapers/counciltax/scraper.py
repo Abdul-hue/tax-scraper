@@ -9,6 +9,7 @@ from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 
 from .models import CouncilTaxQuery, CouncilTaxResult, PropertyRecord
+from ..common.browser import get_browser_args
 
 logger = logging.getLogger(__name__)
 
@@ -85,14 +86,10 @@ class CouncilTaxScraper:
     def _fetch_council_tax_html(self, postcode: str, headless: bool = True) -> tuple[str, Optional[str]]:
         """Use Playwright to submit the council tax form and return (HTML, screenshot_url)."""
         with sync_playwright() as p:
-            # Add some arguments to be less detectable and more stable in Linux
+            # Use common browser arguments for stability
             browser = p.chromium.launch(
                 headless=headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                ]
+                args=get_browser_args()
             )
             context = browser.new_context(
                 user_agent=(

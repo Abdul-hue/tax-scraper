@@ -1,20 +1,23 @@
-version: "3.9"
-
 services:
   scraper:
     build:
       context: .
       dockerfile: Dockerfile
-    image: scraper-tool-production:latest
+    image: scraper-tool-production
     container_name: scraper-tool-production
+    shm_size: '2gb'
     ports:
-      - "3412:3412"   # Frontend (Nginx) - This is what users will access
-      - "7887:7887"   # Backend (FastAPI/uvi corn)
+      - "3412:3412"
+      - "7887:7887"
     environment:
       - PYTHONUNBUFFERED=1
-      - PORT=7887                  # Important: tells FastAPI to run on 7887 inside container
+      - PORT=7887
+      - CHROMIUM_FLAGS=--no-sandbox --disable-dev-shm-usage
     volumes:
       - scraper_screenshots:/app/static/screenshots
+      - scraper_chrome_profile:/app/chrome_profile
+      - scraper_output:/app/output
+      - scraper_downloads:/app/downloads
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3412/"]
@@ -24,4 +27,7 @@ services:
       start_period: 40s
 
 volumes:
-    scraper_screenshots:
+  scraper_screenshots:
+  scraper_chrome_profile:
+  scraper_output:
+  scraper_downloads:

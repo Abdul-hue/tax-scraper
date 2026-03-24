@@ -11,6 +11,7 @@ from playwright.sync_api import sync_playwright, Page, BrowserContext
 from .models import IDUConfig, IDUResult, PEPEntry
 from . import session as session_mod
 from . import parser as parser_mod
+from ..common.browser import get_browser_args
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,15 @@ class IDUScraper:
         self.output_dir = Path(output_dir)
         self.retry_limit = retry_limit
         self.slow_mo_ms = slow_mo_ms
+        self.otp_used = False
+        self.headless = headless
 
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=True, slow_mo=self.slow_mo_ms)
+        self.browser = self.playwright.chromium.launch(
+            headless=headless, 
+            slow_mo=self.slow_mo_ms,
+            args=get_browser_args()
+        )
         self.context: BrowserContext = self.browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -65,10 +72,13 @@ class IDUScraper:
 
             # Step 2 — Handle "Send One Time Password" page
             try:
-                self.page.wait_for_selector('[data-testid="otp-send"]', timeout=10000)
-                print("Clicking 'Send One Time Password' automatically...")
-                self.page.click('[data-testid="otp-send"]')
-                self.page.wait_for_load_state("networkidle", timeout=15000)
+                otp_send_btn = self.page.locator('[data-testid="otp-send"]')
+                if otp_send_btn.is_visible(timeout=3000):
+                    print("Clicking 'Send One Time Password' automatically...")
+                    otp_send_btn.click()
+                    self.page.wait_for_load_state("networkidle", timeout=15000)
+                else:
+                    print("OTP send button not found, skipping send step...")
             except Exception:
                 print("OTP send page not shown, continuing...")
 
@@ -78,7 +88,19 @@ class IDUScraper:
                 
                 # Check if we have an external OTP mechanism
                 if hasattr(self, 'otp_event') and hasattr(self, 'otp_value'):
+                    if self.otp_used:
+                        print("Resetting stale OTP event/value for retry...")
+                        self.otp_event.clear()
+                        self.otp_value["code"] = ""
+                        self.otp_used = False
+
                     print("Waiting for external OTP injection...")
+                    
+                    # Communicate status to service result storage
+                    if hasattr(self, 'session_id'):
+                        from app.scrapers.service import _save_idu_result
+                        _save_idu_result(self.session_id, {"status": "awaiting_otp"})
+
                     signaled = self.otp_event.wait(timeout=300)
                     if signaled:
                         code = self.otp_value.get("code", "")
@@ -86,6 +108,7 @@ class IDUScraper:
                             print(f"Injecting OTP code: {code}")
                             self.page.fill('[data-testid="otp-code"]', code)
                             self.page.click('[data-testid="otp-submit"]')  # ← FIXED
+                            self.otp_used = True
                             self.page.wait_for_load_state("networkidle", timeout=30000)
                         else:
                             print("OTP event signaled but no code found")
@@ -113,13 +136,29 @@ class IDUScraper:
                 pass
 
             # Step 5 — Verify we are now logged in
-            html = self.page.content()
-            if "You are logged in" in html or "Log Out" in html or "newSearch" in self.page.url:
-                session_mod.save_session(self.context, self.session_file)
-                logger.info("Session saved")
-                return
+            logger.info(f"Final login check at URL: {self.page.url}")
+            try:
+                # Wait longer for dashboard and ensure network is idle
+                self.page.wait_for_load_state("networkidle", timeout=10000)
+                
+                # Check for various dashboard indicators using valid selectors
+                # Combine CSS selectors with a separate text check using .or_()
+                dashboard_indicator = self.page.locator("#hd-logout-button, .newSearch").or_(
+                    self.page.get_by_text("You are logged in")
+                ).first
+                dashboard_indicator.wait_for(state="visible", timeout=10000)
+                
+                logger.info("Dashboard detected successfully")
+            except Exception as e:
+                try:
+                    logger.error(f"Dashboard detection failed. URL: {self.page.url}, Title: {self.page.title()}")
+                except Exception:
+                    logger.error("Dashboard detection failed. Page was already closed.")
+                raise RuntimeError(f"Login failed — dashboard not detected after MFA: {str(e)}")
 
-            raise RuntimeError("Login failed — dashboard not detected after MFA")
+            session_mod.save_session(self.context, self.session_file)
+            logger.info("Session saved")
+            return
 
         except Exception:
             logger.exception("Error during login flow")
@@ -130,6 +169,42 @@ class IDUScraper:
         last_exc: Optional[Exception] = None
         for attempt in range(1, self.retry_limit + 1):
             try:
+                # Ensure the page and context are still open before trying to use them
+                try:
+                    if self.page.is_closed():
+                        raise Exception("Page closed")
+                    # quick check context is alive
+                    _ = self.context.pages
+                except Exception:
+                    logger.info("Page or context was closed, re-initializing browser stack...")
+                    # safely close everything first
+                    for obj, method in [
+                        (self, 'page'), (self, 'context'), (self, 'browser')
+                    ]:
+                        try:
+                            getattr(self, method).close()
+                        except Exception:
+                            pass
+                    
+                    # re-initialize fresh
+                    try:
+                        self.browser = self.playwright.chromium.launch(
+                            headless=self.headless, 
+                            slow_mo=self.slow_mo_ms,
+                            args=get_browser_args()
+                        )
+                        self.context = self.browser.new_context(
+                            viewport={"width": 1280, "height": 800},
+                            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                                        " AppleWebKit/537.36 (KHTML, like Gecko)"
+                                        " Chrome/114.0.0.0 Safari/537.36"),
+                        )
+                        self.page = self.context.new_page()
+                        logger.info("Browser stack re-initialized successfully")
+                    except Exception as reinit_err:
+                        logger.error(f"Failed to re-initialize browser: {reinit_err}")
+                        raise
+
                 self._ensure_logged_in()
                 self.page.goto("https://idu.tracesmart.co.uk/?page=newSearch&searchtype=1", timeout=20000)
                 self.page.wait_for_selector("#forename", timeout=20000)
@@ -196,9 +271,23 @@ class IDUScraper:
                         pass
 
                 self.page.click("#inputbut")
-                self.page.wait_for_load_state("networkidle", timeout=30000)
-                self.page.wait_for_selector("#result-summary-status", timeout=20000)
-
+                
+                # Wait for results page to fully render
+                logger.info("Form submitted, waiting for results to render...")
+                self.page.wait_for_selector("#result-summary-status", timeout=30000)
+                
+                # FIX: Ensure all dynamic result sections are fully loaded
+                try:
+                    self.page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    logger.debug("Network did not go idle after results, proceeding anyway")
+                
+                # Safety buffer for dynamic components
+                self.page.wait_for_timeout(2000)
+                
+                html = self.page.content()
+                
+                # Screenshot after results are confirmed loaded
                 import os, time as _time
                 from pathlib import Path
                 _backend_dir = Path(__file__).parent.parent.parent
@@ -207,15 +296,14 @@ class IDUScraper:
                 _ts = _time.strftime("%Y%m%d_%H%M%S")
                 _ss_name = f"idu_{_ts}.png"
                 _ss_path = str(_ss_dir / _ss_name)
+                screenshot_url = None
                 try:
                     self.page.screenshot(path=_ss_path, full_page=True)
                     screenshot_url = f"/api/files/screenshots/{_ss_name}"
                     logger.info(f"Screenshot saved to: {_ss_path}")
                 except Exception as e:
                     logger.warning(f"Failed to capture screenshot: {e}")
-                    screenshot_url = None
 
-                html = self.page.content()
                 soup = parser_mod.BeautifulSoup(html, "lxml")
 
                 verdict, score = parser_mod.parse_verdict(soup)

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import os, random, time as _time, logging
 from pathlib import Path
 from .models import LandRegistryQuery, LandRegistryResult
+from ..common.browser import get_browser_args
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,18 @@ PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 
 
 class LandRegistryScraper:
+    def _cleanup_profile(self, profile_path: Path):
+        """Delete stale lock files from the profile directory."""
+        lock_files = ["SingletonLock", "SingletonCookie", "SingletonSocket"]
+        for lock_file in lock_files:
+            file_path = profile_path / lock_file
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                    logger.info(f"Deleted stale lock file: {lock_file}")
+                except Exception as e:
+                    logger.warning(f"Could not delete lock file {lock_file}: {e}")
+
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
         # HARDCODED CREDENTIALS
         username = "TWilkinson3093"
@@ -40,17 +53,29 @@ class LandRegistryScraper:
             else:
                 address_line_1 = house_field
 
+            user_data_path = Path(PROFILE_DIR).resolve() / username
+            self._cleanup_profile(user_data_path)
+
             with sync_playwright() as p:
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=os.path.join(PROFILE_DIR, username),
-                    headless=True,
-                    channel="chrome",
-                    viewport={"width": 1280, "height": 720},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    args=["--disable-blink-features=AutomationControlled"],
-                    ignore_default_args=["--enable-automation"],
-                    accept_downloads=True,
-                )
+                # Use common browser arguments for stability
+                launch_args = {
+                    "user_data_dir": str(user_data_path),
+                    "headless": True,
+                    "args": get_browser_args() + ["--no-first-run", "--disable-software-rasterizer"],
+                    "ignore_default_args": ["--enable-automation"],
+                    "accept_downloads": True,
+                }
+
+                try:
+                    logger.info(f"Launching browser with profile: {user_data_path}")
+                    context = p.chromium.launch_persistent_context(**launch_args)
+                except Exception as e:
+                    # If it fails, the lock might be deeper. Try one more time with a full cleanup.
+                    logger.warning(f"Browser launch failed: {e}. Performing deep cleanup and retrying...")
+                    _time.sleep(2)
+                    self._cleanup_profile(user_data_path)
+                    context = p.chromium.launch_persistent_context(**launch_args)
+
                 page = context.new_page()
                 Stealth().apply_stealth_sync(page)
 

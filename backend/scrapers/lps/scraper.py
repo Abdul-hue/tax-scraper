@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from playwright.sync_api import sync_playwright
 from .models import LpsQuery, LpsResult, LpsProperty, LpsPropertyDetail
+from ..common.browser import get_browser_args
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,10 @@ class LpsScraper:
             
             try:
                 with sync_playwright() as p:
-                    browser = p.chromium.launch(headless=True)
+                    browser = p.chromium.launch(
+                        headless=True,
+                        args=get_browser_args()
+                    )
                     context = browser.new_context(viewport={"width": 1280, "height": 1024})
                     page = context.new_page()
                     

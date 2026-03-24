@@ -55,6 +55,11 @@ function App() {
                     setResult(res.data.result)
                     setIduStatus('complete')
                     setLoading(false)
+                } else if (res.data.status === 'awaiting_otp') {
+                    // This is the key change: update status so UI shows OTP input
+                    setIduStatus('awaiting_otp')
+                } else if (res.data.status === 'processing') {
+                    setIduStatus('processing')
                 } else if (res.data.status === 'error') {
                     clearInterval(interval)
                     setIduStatus('error')
@@ -73,7 +78,7 @@ function App() {
             await axios.post('/api/scrapers/idu/submit-otp', null, {
                 params: { session_id: iduSessionId, otp: otpInput }
             })
-            startPolling(iduSessionId)
+            // Continue polling - startPolling is already running from handleScrape
         } catch (err) {
             alert("OTP submission failed: " + (err.response?.data?.detail || err.message))
             setIduStatus('awaiting_otp')
@@ -92,7 +97,8 @@ function App() {
                     params: iduData
                 })
                 setIduSessionId(res.data.session_id)
-                setIduStatus('awaiting_otp')
+                // Start polling immediately - the status will tell us when to show OTP
+                startPolling(res.data.session_id)
             } catch (err) {
                 alert("Failed to start IDU scraper: " + (err.response?.data?.detail || err.message))
                 setIduStatus('error')
