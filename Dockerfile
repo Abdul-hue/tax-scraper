@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libxshmfence1 \
     fonts-liberation \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
