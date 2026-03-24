@@ -1,0 +1,130 @@
+{
+  "payslip": [
+    {
+      "label": "Your Payslip Wage Summary",
+      "percent": "%",
+      "yearly": "Yearly",
+      "monthly": "Monthly",
+      "weekly": "Week"
+    },
+    {
+      "label": "Gross Pay",
+      "percent": "100%",
+      "yearly": "£36,000",
+      "monthly": "£3,000",
+      "weekly": "£692.31"
+    },
+    {
+      "label": "Tax free allowance",
+      "percent": "34%",
+      "yearly": "£12,579",
+      "monthly": "£1,048.25",
+      "weekly": "£241.90"
+    },
+    {
+      "label": "Marriage Allowance",
+      "percent": "0%",
+      "yearly": "£0",
+      "monthly": "£0",
+      "weekly": "£0"
+    },
+    {
+      "label": "Total taxable",
+      "percent": "65%",
+      "yearly": "£23,421",
+      "monthly": "£1,951.75",
+      "weekly": "£450.40"
+    },
+    {
+      "label": "Total Tax Due",
+      "percent": "13%",
+      "yearly": "£4,684.20",
+      "monthly": "£390.35",
+      "weekly": "£90.08"
+    },
+    {
+      "label": "% rate",
+      "percent": "0%",
+      "yearly": "£0",
+      "monthly": "£0",
+      "weekly": "£0"
+    },
+    {
+      "label": "20% rate",
+      "percent": "13%",
+      "yearly": "£4,684.20",
+      "monthly": "£390.35",
+      "weekly": "£90.08"
+    },
+    {
+      "label": "40% rate",
+      "percent": "0%",
+      "yearly": "£0",
+      "monthly": "£0",
+      "weekly": "£0"
+    },
+    {
+      "label": "45% rate",
+      "percent": "0%",
+      "yearly": "£0",
+      "monthly": "£0",
+      "weekly": "£0"
+    },
+    {
+      "label": "Student Loan",
+      "percent": "0%",
+      "yearly": "£0",
+      "monthly": "£0",
+      "weekly": "£0"
+    },
+    {
+      "label": "National Insurance",
+      "percent": "5%",
+      "yearly": "£1,874.40",
+      "monthly": "£156.20",
+      "weekly": "£36.05"
+    },
+    {
+      "label": "Pension [you]",
+      "percent": "0%",
+      "yearly": "£0",
+      "monthly": "£0",
+      "weekly": "£0"
+    },
+    {
+      "label": "Pension [HMRC]",
+      "percent": "0%",
+      "yearly": "£0",
+      "monthly": "£0",
+      "weekly": "£0"
+    },
+    {
+      "label": "Total Deductions",
+      "percent": "18%",
+      "yearly": "£6,558.60",
+      "monthly": "£546.55",
+      "weekly": "£126.13"
+    },
+    {
+      "label": "Net Wage",
+      "percent": "81%",
+      "yearly": "£29,441.40",
+      "monthly": "£2,453.45",
+      "weekly": "£566.18"
+    },
+    {
+      "label": "Employers NI",
+      "percent": "12%",
+      "yearly": "£4,650",
+      "monthly": "£387.50",
+      "weekly": "£89.42"
+    },
+    {
+      "label": "Net change from 2024",
+      "percent": "0%",
+      "yearly": "£0",
+      "monthly": "£0",
+      "weekly": "£0"
+    }
+  ]
+}
