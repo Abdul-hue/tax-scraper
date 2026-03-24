@@ -3,3 +3,6 @@ uvicorn
 playwright
 beautifulsoup4
 lxml
+playwright-stealth
+pdfplumber
+requests

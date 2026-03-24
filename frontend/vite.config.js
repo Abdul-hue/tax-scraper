@@ -8,9 +8,11 @@ export default defineConfig({
         // Proxy is only used in local dev — in production, nginx routes /api to FastAPI on 7887
         proxy: {
             '/api': {
-                target: 'http://localhost:7887',
+                target: 'http://localhost:8000',
                 changeOrigin: true,
-                rewrite: (path) => path.replace(/^\/api/, '')
+                rewrite: (path) => path.replace(/^\/api/, ''),
+                timeout: 120000,
+                proxyTimeout: 120000,
             }
         }
     }

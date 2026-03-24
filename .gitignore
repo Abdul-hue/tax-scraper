@@ -1,27 +1,14 @@
-# Python
-backend/venv/
+﻿﻿__pycache__/
+*.pyc
+.env
+.venv/
 venv/
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Node / React
-frontend/node_modules/
-node_modules/
-frontend/dist/
-frontend/build/
-.eslintcache
-
-# Project specific
-backend/static/screenshots/*.png
+backend/chrome_profile/
+backend/debug/
+backend/downloads/
 backend/output/
-/output/
-
-# Secrets — NEVER commit these
-.env*
-.emv*
-*.local
-.env.deploy
-.emv.deploy
-backend/.env.deploy
-backend/.emv.deploy
+backend/__pycache__/
+backend/scrapers/__pycache__/
+*.png
+node_modules/
+dist/

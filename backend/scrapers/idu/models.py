@@ -75,21 +75,36 @@ class IDUResult:
     search_activity: Dict = field(default_factory=dict)
     address_links: List[Dict] = field(default_factory=list)
     property_detail: Dict = field(default_factory=dict)
-    screenshot_path: Optional[str] = None
+    screenshot_url: Optional[str] = None
     error: Optional[str] = None
 
     @property
     def success(self) -> bool:
-        """True when no error and verdict has been set."""
-        return (self.error is None) and (self.verdict != "")
+        return not self.error and bool(self.verdict)
 
-    def to_dict(self) -> Dict:
-        """Return a JSON-serializable dict of the result."""
-        try:
-            return asdict(self)
-        except Exception:
-            logger.exception("Failed to convert IDUResult to dict")
-            return {}
+    def to_dict(self) -> dict:
+        return {
+            "scraped_at": self.scraped_at,
+            "search_id": self.search_id,
+            "verdict": self.verdict,
+            "score": self.score,
+            "summary_items": self.summary_items,
+            "address_detail": self.address_detail,
+            "credit_active": self.credit_active,
+            "dob_verification": self.dob_verification,
+            "mortality": self.mortality,
+            "gone_away": self.gone_away,
+            "pep_entries": self.pep_entries,
+            "sanction_result": self.sanction_result,
+            "ccj": self.ccj,
+            "insolvency": self.insolvency,
+            "company_director": self.company_director,
+            "search_activity": self.search_activity,
+            "address_links": self.address_links,
+            "property_detail": self.property_detail,
+            "screenshot_url": self.screenshot_url,
+            "error": self.error,
+        }
 
     def to_json(self, indent: int = 2) -> str:
         """Return pretty JSON string."""

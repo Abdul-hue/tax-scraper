@@ -1,14 +1,14 @@
 """
 Scraper/parkers/scraper.py
 
-Valuates a car by registration plate using the Parkers website.
-Uses stealth Playwright settings to avoid bot detection.
+Rewritten Parkers scraper flow to handle every page in order.
 """
 
 import logging
 import os
-import re
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -17,527 +17,331 @@ from .models import ParkersConfig, ParkersResult, ValuationPrices
 
 logger = logging.getLogger(__name__)
 
-VALUATION_URL = "https://www.parkers.co.uk/"
-
+VALUATION_URL = "https://www.parkers.co.uk/car-valuation/"
 
 class ParkersScraper:
     def __init__(self, config: Optional[ParkersConfig] = None, headless: bool = True):
-        if config is None:
-            config = ParkersConfig(headless=headless)
-        self.config = config
+        self.headless = headless
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
-
-    def valuate(self, config: ParkersConfig, screenshot: bool = False, save_json: bool = False) -> ParkersResult:
-        """
-        Valuate a vehicle using the provided config.
-        
-        Config can be either registration plate (Path A) or make/model/year (Path B).
-        For now, only Path A (registration) is fully implemented.
-        """
-        if not config.reg_plate:
-            from datetime import datetime, timezone
-            return ParkersResult(
-                config=config.to_dict() if hasattr(config, 'to_dict') else {},
-                scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                reg_plate="",
-                error="Only registration plate input (Path A) is currently supported",
-            )
-        
-        # For now, just use valuate_by_reg
-        return self.valuate_by_reg(config.reg_plate, save_screenshot=screenshot)
-
-    def valuate_batch(
-        self,
-        configs: list[ParkersConfig],
-        screenshot: bool = False,
-        save_xlsx: bool = False,
-    ) -> list[ParkersResult]:
-        """Valuate multiple vehicles. Continues on individual failures."""
-        from datetime import datetime, timezone
-        results = []
-        for config in configs:
-            try:
-                result = self.valuate(config, screenshot=screenshot)
-                results.append(result)
-            except Exception as e:
-                logger.error(f"Failed to valuate {config.reg_plate or config.make}: {e}")
-                results.append(ParkersResult(
-                    config=config.to_dict() if hasattr(config, 'to_dict') else {},
-                    scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    reg_plate=config.reg_plate or "",
-                    error=str(e),
-                ))
-        return results
-
-    def valuate_by_reg(self, plate: str, save_screenshot: bool = False) -> ParkersResult:
+    def valuate_by_reg(self, plate: str) -> ParkersResult:
         plate = plate.strip().upper().replace(" ", "")
         logger.info(f"Valuating by reg plate: {plate}")
 
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
-                headless=self.config.headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-infobars",
-                    "--window-size=1280,900",
-                ],
+                headless=self.headless,
+                args=["--disable-blink-features=AutomationControlled"]
             )
             context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
                 viewport={"width": 1280, "height": 900},
-                locale="en-GB",
-            )
-            context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
             page = context.new_page()
 
             try:
-                # Step 1: Navigate to valuation page
+                # STEP 1: Enter plate and submit
                 logger.info(f"Navigating to {VALUATION_URL}")
-                page.goto(VALUATION_URL, wait_until="domcontentloaded", timeout=30_000)
-                time.sleep(2)
-
-                current_url = page.url
-                logger.info(f"Landed on: {current_url}")
-
-                # Step 2: Dismiss cookie banners / popups
-                _dismiss_overlays(page)
-
-                # Click the "Free car valuations" tab to reveal the vrm input
+                page.goto(VALUATION_URL, wait_until="domcontentloaded", timeout=10000)
+                
+                # Dismiss cookies if present
                 try:
-                    tab = page.locator("a[data-tabs-target='valuations']")
-                    tab.wait_for(state="visible", timeout=5000)
-                    tab.click()
-                    page.wait_for_timeout(800)
-                    logger.info("Clicked 'Free car valuations' tab")
+                    page.wait_for_selector('button[id*="onetrust-accept"]', timeout=2000)
+                    page.click('button[id*="onetrust-accept"]', timeout=1000)
+                    logger.info("Cookies dismissed")
+                except:
+                    logger.info("No cookies button found")
+
+                # Wait for the VRM input to appear
+                logger.info("Waiting for VRM input field...")
+                page.wait_for_selector(
+                    'input.vrm-lookup__input',
+                    state='visible',
+                    timeout=15000
+                )
+                
+                # Clear field first then type fast
+                plate_input = page.locator('input.vrm-lookup__input')
+                plate_input.click()
+                plate_input.fill('')
+                plate_input.type(plate, delay=50)  # 50ms between keystrokes
+                logger.info(f"Typed plate: {plate}")
+                
+                # Handle potential captcha check before clicking
+                captcha_selector = '#recaptcha-v2, iframe[src*="recaptcha"]'
+                if page.locator(captcha_selector).count() > 0:
+                    logger.info("Captcha detected, waiting 30s for auto-resolve...")
+                    page.wait_for_timeout(31000)
+
+                logger.info("Clicking submit button...")
+                page.locator('button.vrm-lookup__button').click()
+                
+                # Now wait for EITHER the error OR navigation away from 
+                # the current page (confirmation page loaded) 
+                try:
+                    # Check for not-found error or confirmation page (fast check)
+                    page.wait_for_selector( 
+                        'span.error, .vrm-confirm__heading--version', 
+                        timeout=10000,
+                        state='attached'
+                    ) 
+                    
+                    if page.locator('span.error').count() > 0:
+                        # Error appeared — car not in database 
+                        error_text = page.inner_text('span.error').lower()
+                        if 'not found' in error_text:
+                            logger.info(f"Registration not found: {error_text}")
+                            return ParkersResult( 
+                                plate=plate, 
+                                reg_plate=plate, 
+                                error='not_found', 
+                                message='not_found', 
+                                scraped_at=datetime.now(timezone.utc).isoformat() + 'Z' 
+                            ) 
+                except Exception: 
+                    # No error or confirmation shown yet
+                    pass 
+
+                # Wait for confirmation page specifically if not already there
+                try:
+                    page.wait_for_selector(".vrm-confirm__image, .vrm-confirm__heading--version", timeout=10000)
+                    logger.info("Reached confirmation page")
                 except Exception as e:
-                    logger.warning(f"Could not click valuations tab: {e}")
-
-                if save_screenshot:
-                    _save_screenshot(page, f"debug/parkers_{plate}_landed.png")
-
-                # Step 3: Fill reg plate input
-                reg_input = _find_reg_input(page)
-                if reg_input is None:
-                    _save_screenshot(page, f"debug/parkers_{plate}_no_input.png")
-                    from datetime import datetime, timezone
+                    logger.error(f"Failed to reach confirmation page: {str(e)}")
+                    # Take error screenshot
+                    self._take_error_screenshot(page, "error_confirm_page")
                     return ParkersResult(
-                        config=self.config.to_dict() if hasattr(self.config, 'to_dict') else {},
-                        scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        plate=plate,
+                        config={"plate": plate},
                         reg_plate=plate,
-                        error="Could not find reg plate input"
+                        error="navigation_error",
+                        message="Could not reach confirmation page after plate submission"
                     )
 
-                reg_input.click()
-                reg_input.fill(plate)
-                logger.info(f"Filled reg plate: {plate}")
-                time.sleep(0.5)
-
-                # Step 4: Submit the form
-                if not _submit_valuation_form(page):
-                    _save_screenshot(page, f"debug/parkers_{plate}_no_submit.png")
-                    from datetime import datetime, timezone
+                # Check if plate found
+                if not page.locator(".vrm-confirm__image").count() and not page.locator(".vrm-confirm__heading--version").count():
                     return ParkersResult(
-                        config=self.config.to_dict() if hasattr(self.config, 'to_dict') else {},
-                        scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        plate=plate,
+                        config={"plate": plate},
                         reg_plate=plate,
-                        error="Could not submit form"
+                        error="not_found",
+                        message="not_found"
                     )
 
-                time.sleep(3)
-                _dismiss_overlays(page)
-                current_url = page.url
-                logger.info(f"Post-submit URL: {current_url}")
+                # STEP 2: Confirmation page — extract vehicle details and image
+                vehicle_image = page.evaluate("""
+                    () => {
+                        const img = document.querySelector('.vrm-confirm__image')
+                        if (!img) return ''
+                        
+                        // Try data-interchange first (lazy loaded)
+                        const interchange = img.getAttribute('data-interchange')
+                        if (interchange) {
+                            // Format: "[url1, (default)], [url2, (medium)]"
+                            // Extract the medium/600x400 URL
+                            const matches = interchange.match(
+                                /\\[([^\\],]+),\\s*\\(medium\\)\\]/
+                            )
+                            if (matches) return matches[1].trim()
+                            
+                            // Fallback to default
+                            const defaultMatch = interchange.match(
+                                /\\[([^\\],]+),\\s*\\(default\\)\\]/
+                            )
+                            if (defaultMatch) return defaultMatch[1].trim()
+                        }
+                        
+                        // Fallback to src if not transparent
+                        const src = img.getAttribute('src') || ''
+                        if (src.includes('transparent')) return ''
+                        return src
+                    }
+                """)
+                vehicle_version = page.locator("h3.vrm-confirm__heading--version").inner_text().strip()
+                
+                vehicle_details = {}
+                detail_items = page.locator("ul.vrm-confirm__details-list li").all()
+                for item in detail_items:
+                    text = item.inner_text().strip()
+                    if ":" in text:
+                        k, v = text.split(":", 1)
+                        vehicle_details[k.strip()] = v.strip()
 
-                # Verify we're on a confirm page
-                if "/confirm/" not in current_url:
-                    error_msg = f"Unexpected post-submit URL: {current_url} (expected /confirm/)"
-                    logger.error(error_msg)
-                    raise RuntimeError(error_msg)
+                # STEP 3: Select valuation purpose
+                logger.info("Selecting valuation purpose...")
+                page.check('#curious')
+                page.click('#valuation-confirmation-link')
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
 
-                # Handle /confirm/ page — select valuation purpose radio + click continue
-                if "/confirm/" in page.url:
-                    logger.info("Confirmation page detected — selecting purpose radio and continuing")
-                    _handle_confirmation_page(page)
-                    page.wait_for_load_state("domcontentloaded", timeout=10000)
-                    time.sleep(2)
-                    _dismiss_overlays(page)
-                    if save_screenshot:
-                        _save_screenshot(page, f"debug/parkers_{plate}_after_confirm.png")
-                    logger.info(f"Post-confirm URL: {page.url}")
+                # Get current URL and replace 'select-a-valuation' with 
+                # 'free-valuation' directly — skips the primer page entirely 
+                current_url = page.url 
+                free_val_url = current_url.replace( 
+                    'select-a-valuation', 
+                    'free-valuation' 
+                ) 
+                
+                # Navigate directly to free valuation page 
+                logger.info(f"Navigating directly to free valuation: {free_val_url}")
+                page.goto(free_val_url, wait_until="domcontentloaded", timeout=15000)
 
-                # Handle select-a-valuation intermediate page
-                if "select-a-valuation" in page.url:
-                    handled = _handle_select_valuation_page(page)
-                    if not handled:
-                        logger.error("Could not navigate past select-a-valuation page")
-                        from datetime import datetime, timezone
-                        return ParkersResult(
-                            config=self.config.to_dict() if hasattr(self.config, 'to_dict') else {},
-                            scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            reg_plate=plate,
-                            error="Could not navigate past select-a-valuation page"
+                # STEP 5: Free valuation results page — extract prices
+                logger.info("Extracting prices...")
+                try:
+                    page.wait_for_selector(".valuation-price-box__price", timeout=10000, state='attached')
+                    
+                    # STEP 1 — Dismiss all popups using JavaScript:
+                    page.evaluate("""
+                        () => {
+                            const popup = document.getElementById('newsletterSignup')
+                            if (popup) popup.remove()
+                            
+                            // Remove any overlay divs
+                            const overlays = document.querySelectorAll(
+                                '[class*="overlay"], [class*="modal"], [class*="popup"]'
+                            )
+                            overlays.forEach(el => el.remove())
+                            
+                            // Remove vis_hide layer
+                            const vis = document.getElementById('_vis_opt_path_hides')
+                            if (vis) vis.remove()
+                        }
+                    """)
+
+                    vehicle_full_name = page.locator("span.valuation-option-box__header-row--vehicle").first.inner_text().strip()
+                except Exception as e:
+                    logger.error(f"Failed to find vehicle details on result page: {str(e)}")
+                    self._take_error_screenshot(page, "error_result_page")
+                    return ParkersResult(
+                        plate=plate,
+                        config={"plate": plate},
+                        reg_plate=plate,
+                        error="extraction_error",
+                        message="Could not find vehicle details on result page"
+                    )
+                
+                # Split vehicle_full_name to get make, model, year
+                # e.g. "Ford Fiesta 1.6 TDCi Zetec ECOnetic 5d 2014/14"
+                make = ""
+                model = ""
+                year = ""
+                parts = vehicle_full_name.split(" ")
+                if len(parts) > 0: make = parts[0]
+                if len(parts) > 1: model = parts[1]
+                if len(parts) > 0: year = parts[-1]
+
+                # STEP 2 — Extract prices using JavaScript evaluation with the correct selectors:
+                prices_raw = page.evaluate("""
+                    () => {
+                        const result = {
+                            private_low: null,
+                            private_high: null,
+                            dealer_low: null,
+                            dealer_high: null,
+                            part_exchange: null
+                        }
+                        
+                        // Find all price boxes
+                        const boxes = document.querySelectorAll(
+                            '.valuation-price-box__container__inner, .valuation-price-box__price-summary'
                         )
-                    logger.info(f"Post-valuation-select URL: {page.url}")
-
-                if save_screenshot:
-                    _save_screenshot(page, f"debug/parkers_{plate}_post_submit.png")
-
-                # Step 5: Handle vehicle selection dropdown if shown
-                if _vehicle_picker_present(page):
-                    logger.info("Vehicle picker shown — selecting first option")
-                    _select_first_vehicle(page)
-                    time.sleep(3)
-                    _dismiss_overlays(page)
-                    if save_screenshot:
-                        _save_screenshot(page, f"debug/parkers_{plate}_after_picker.png")
-
-                # Step 6: Dismiss email gate
-                _dismiss_email_gate(page)
-                time.sleep(1)
-
-                # Dismiss newsletter popup if present
-                try:
-                    close_btn = page.locator(".newsletter-signup__inner__close")
-                    close_btn.wait_for(state="visible", timeout=3000)
-                    close_btn.click()
-                    page.wait_for_timeout(500)
-                    logger.info("Dismissed newsletter popup")
-                except Exception:
-                    pass  # popup not present
-
-                # Step 7: Wait for JS-rendered valuation prices to appear
-                try:
-                    page.wait_for_selector(
-                        "[class*='valuation'], [class*='price'], .car-valuation__price",
-                        timeout=15000
-                    )
-                    logger.info("Valuation price element found — ready to parse")
-                except Exception:
-                    logger.warning("Timed out waiting for valuation element — parsing anyway")
-
-                # Parse results
-                html = page.content()
-                os.makedirs("debug", exist_ok=True)
-                with open(f"debug/parkers_{plate}_results.html", "w", encoding="utf-8") as f:
-                    f.write(html)
-
-                from .parser import parse_valuation_prices, parse_vehicle_details
-                prices = parse_valuation_prices(html)
-                vehicle = parse_vehicle_details(html)
-
-                if save_screenshot:
-                    _save_screenshot(page, f"debug/parkers_{plate}_results.png")
-
-                if not prices:
-                    from datetime import datetime, timezone
-                    return ParkersResult(
-                        config=self.config.to_dict() if hasattr(self.config, 'to_dict') else {},
-                        scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        reg_plate=plate,
-                        error=f"Prices not found — check debug/parkers_{plate}_results.html",
+                        
+                        boxes.forEach(box => {
+                            const nameEl = box.querySelector(
+                                '.valuation-price-box__price-name'
+                            )
+                            const priceEl = box.querySelector(
+                                '.valuation-price-box__price'
+                            )
+                            if (!nameEl || !priceEl) return
+                            
+                            const name = nameEl.textContent.trim().toLowerCase()
+                            const price = priceEl.textContent.trim()
+                            
+                            // Parse range like "£1,090 - £2,010"
+                            const parts = price.split(' - ')
+                            
+                            if (name.includes('private')) {
+                                result.private_low = parts[0] || price
+                                result.private_high = parts[1] || null
+                            } else if (name.includes('dealer')) {
+                                result.dealer_low = parts[0] || price
+                                result.dealer_high = parts[1] || null
+                            } else if (name.includes('part exchange') || name.includes('part-exchange')) {
+                                result.part_exchange = price
+                            }
+                        })
+                        
+                        return result
+                    }
+                """)
+                
+                prices = ValuationPrices()
+                if prices_raw:
+                    prices = ValuationPrices(
+                        private_low=prices_raw.get('private_low'),
+                        private_high=prices_raw.get('private_high'),
+                        dealer_low=prices_raw.get('dealer_low'),
+                        dealer_high=prices_raw.get('dealer_high'),
+                        part_exchange=prices_raw.get('part_exchange')
                     )
 
-                from datetime import datetime, timezone
+                # Wait for at least one price to be visible before screenshot 
+                try: 
+                    page.wait_for_selector( 
+                        '.valuation-price-box__price', 
+                        state='visible', 
+                        timeout=5000 
+                    ) 
+                except Exception: 
+                    # If still not visible, scroll to trigger lazy load 
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)") 
+                    page.wait_for_timeout(1000) 
+                    page.evaluate("window.scrollTo(0, 0)") 
+                    page.wait_for_timeout(500) 
+                
+                # Take screenshot AFTER content is confirmed visible 
+                import time as _time
+                _backend_dir = Path(__file__).parent.parent.parent
+                _ss_dir = _backend_dir / "static" / "screenshots"
+                _ss_dir.mkdir(parents=True, exist_ok=True)
+                _ts = _time.strftime("%Y%m%d_%H%M%S")
+                _ss_name = f"parkers_{_ts}.png"
+                _ss_path = str(_ss_dir / _ss_name)
+                page.screenshot(path=_ss_path, full_page=False)  # full_page=False
+                screenshot_url = f"/api/files/screenshots/{_ss_name}"
+                logger.info(f"Screenshot saved to: {_ss_path}")
+
                 return ParkersResult(
-                    config=self.config.to_dict() if hasattr(self.config, 'to_dict') else {},
+                    plate=plate,
+                    config={"plate": plate},
                     scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     reg_plate=plate,
+                    make=make,
+                    model=model,
+                    year=year,
+                    vehicle_version=vehicle_version,
+                    vehicle_full_name=vehicle_full_name,
+                    vehicle_image=vehicle_image,
+                    vehicle_details=vehicle_details,
                     prices=prices,
-                    error=None
+                    screenshot_url=screenshot_url
                 )
 
-            except PlaywrightTimeout as e:
-                logger.error(f"Timeout: {e}")
-                _save_screenshot(page, f"debug/parkers_{plate}_timeout.png")
-                from datetime import datetime, timezone
-                return ParkersResult(
-                    config=self.config.to_dict() if hasattr(self.config, 'to_dict') else {},
-                    scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    reg_plate=plate,
-                    error=f"Timeout: {e}"
-                )
             except Exception as e:
-                logger.error(f"Error: {e}", exc_info=True)
-                _save_screenshot(page, f"debug/parkers_{plate}_error.png")
-                from datetime import datetime, timezone
-                return ParkersResult(
-                    config=self.config.to_dict() if hasattr(self.config, 'to_dict') else {},
-                    scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    reg_plate=plate,
-                    error=str(e)
-                )
+                logger.exception("Parkers scraper error")
+                return ParkersResult(plate=plate, error="scraper_error", message=str(e))
             finally:
                 browser.close()
 
+    def valuate(self, config: ParkersConfig, **kwargs) -> ParkersResult:
+        return self.valuate_by_reg(config.reg_plate)
 
-# ── Helper functions ────────────────────────────────────────────────────────
-
-def _handle_select_valuation_page(page) -> bool:
-    """
-    Handle the /select-a-valuation/ intermediate page.
-    This page offers multiple valuation types (free, private, trade, etc.).
-    Click the "Get my free valuation" CTA button to navigate to free-valuation page.
-    """
-    if "select-a-valuation" not in page.url:
-        return False
-
-    logger.info("select-a-valuation page detected - navigating to free valuation")
-
-    # Strategy 1: Click the free valuation CTA button directly
-    try:
-        btn = page.locator("a.valuation-primer-page__option__cta__link--free").first
-        btn.wait_for(state="visible", timeout=8000)
-        href = btn.get_attribute("href")
-        if href:
-            full_url = "https://www.parkers.co.uk" + href if href.startswith("/") else href
-            logger.info(f"Navigating to free valuation: {full_url}")
-            page.goto(full_url, wait_until="domcontentloaded", timeout=30000)
-            return True
-        else:
-            btn.click()
-            page.wait_for_load_state("domcontentloaded", timeout=30000)
-            return True
-    except Exception as e:
-        logger.warning(f"Free valuation button strategy failed: {e}")
-
-    # Strategy 2: Derive URL by replacing path segment
-    derived = page.url.replace("/select-a-valuation/", "/free-valuation/")
-    logger.info(f"Derived free-valuation URL: {derived}")
-    try:
-        page.goto(derived, wait_until="domcontentloaded", timeout=30000)
-        if "free-valuation" in page.url:
-            return True
-    except Exception as e:
-        logger.warning(f"Derived URL strategy failed: {e}")
-
-    # Save debug files if all strategies fail
-    try:
-        os.makedirs("debug", exist_ok=True)
-        with open("debug/parkers_select_valuation.html", "w", encoding="utf-8") as f:
-            f.write(page.content())
-        page.screenshot(path="debug/parkers_select_valuation.png")
-        logger.warning("All strategies failed - saved debug files")
-    except Exception:
-        pass
-
-    return False
-
-
-def _dismiss_overlays(page):
-    """Dismiss cookie banners, newsletter popups, GDPR notices."""
-    selectors = [
-        "button.bm-close-btn", "[class*='bm-close']",
-        "button[aria-label*='close' i]", "button[aria-label*='dismiss' i]",
-        "[class*='modal'] button[class*='close']",
-        "[class*='popup'] button[class*='close']",
-        "button[id*='accept' i]", "button[class*='accept' i]",
-        "#onetrust-accept-btn-handler", ".cc-btn.cc-accept",
-        "button[title*='Accept' i]", "[class*='sp-btn']",
-    ]
-    for sel in selectors:
-        try:
-            btn = page.locator(sel).first
-            if btn.is_visible(timeout=500):
-                btn.click(timeout=1000)
-                logger.debug(f"Dismissed overlay: {sel}")
-                time.sleep(0.5)
-        except Exception:
-            pass
-
-
-def _find_reg_input(page):
-    """Find the registration plate input field."""
-    # Prioritize selectors from the actual homepage HTML structure
-    valuation_selectors = [
-        ".home-valuations-filters input.vrm-lookup__input",
-        ".home-valuations-filters .vrm-lookup__input",
-        "input.vrm-lookup__input",
-    ]
-    for sel in valuation_selectors:
-        try:
-            el = page.locator(sel).first
-            if el.is_visible(timeout=500):
-                logger.debug(f"Found vrm input: {sel}")
-                return el
-        except Exception:
-            pass
-
-    # Fallback to generic selectors
-    selectors = [
-        "input[placeholder*='reg' i]", "input[placeholder*='plate' i]",
-        "input[placeholder*='Enter reg' i]", "input[type='text']",
-    ]
-    for sel in selectors:
-        try:
-            el = page.locator(sel).first
-            if el.is_visible(timeout=500):
-                logger.debug(f"Found reg input (fallback): {sel}")
-                return el
-        except Exception:
-            pass
-    return None
-
-
-def _submit_valuation_form(page) -> bool:
-    """Click the form submit button on the valuation form."""
-    # Prioritize selectors from the actual homepage HTML structure
-    valuation_selectors = [
-        ".home-valuations-filters button.vrm-lookup__button",
-        ".vrm-lookup__button",
-        "button.vrm-lookup__button",
-    ]
-    for sel in valuation_selectors:
-        try:
-            btn = page.locator(sel).first
-            if btn.is_visible(timeout=500):
-                btn.click(timeout=3000)
-                logger.debug(f"Clicked valuation submit: {sel}")
-                return True
-        except Exception:
-            pass
-
-    # Fallback to generic selectors
-    selectors = [
-        "button[type='submit']", "input[type='submit']",
-        "button:has-text('Value my car')", "button:has-text('Get valuation')",
-        "button:has-text('Value this car')", "button:has-text('Value')",
-    ]
-    for sel in selectors:
-        try:
-            btn = page.locator(sel).first
-            if btn.is_visible(timeout=500):
-                btn.click(timeout=3000)
-                logger.debug(f"Clicked submit: {sel}")
-                return True
-        except Exception:
-            pass
-    try:
-        page.keyboard.press("Enter")
-        return True
-    except Exception:
-        return False
-
-
-def _handle_confirmation_page(page) -> bool:
-    """
-    Select a valuation purpose radio and navigate past the confirmation page.
-    The continue link is below the fold — must scroll to it before interacting.
-    """
-
-    # Step 1: Wait for page to fully load, then select the first valuationPurpose radio button
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=10000)
-        page.wait_for_timeout(1000)  # Allow JS to render radio buttons
-        radios = page.locator("input[name='valuationPurpose']")
-        if radios.count() > 0:
-            radios.nth(0).check()
-            logger.info("Selected valuationPurpose radio option 0")
-        else:
-            logger.debug("No valuationPurpose radio buttons found (will use href fallback)")
-    except Exception as e:
-        logger.debug(f"Could not select radio: {e}")
-
-    # Step 2: Scroll the confirmation link into the viewport
-    try:
-        link = page.locator("#valuation-confirmation-link")
-        link.wait_for(state="attached", timeout=5000)
-        link.scroll_into_view_if_needed()
-        page.wait_for_timeout(500)  # let viewport settle
-        logger.info("Scrolled #valuation-confirmation-link into view")
-    except Exception as e:
-        logger.warning(f"Could not scroll to confirmation link: {e}")
-
-    # Step 3: Extract href and navigate directly (most reliable)
-    try:
-        href = page.locator("#valuation-confirmation-link").get_attribute("href")
-        if href:
-            if href.startswith("/"):
-                href = "https://www.parkers.co.uk" + href
-            logger.info(f"Navigating to: {href}")
-            page.goto(href, wait_until="domcontentloaded", timeout=30000)
-            return True
-    except Exception as e:
-        logger.warning(f"Could not extract href from confirmation link: {e}")
-
-    # Step 4: Fallback — click the link
-    try:
-        page.locator("#valuation-confirmation-link").click()
-        page.wait_for_load_state("domcontentloaded", timeout=30000)
-        logger.info("Clicked confirmation link (fallback)")
-        return True
-    except Exception as e:
-        logger.warning(f"Could not click confirmation link: {e}")
-
-    return False
-
-
-def _vehicle_picker_present(page) -> bool:
-    """Check if a vehicle selection dropdown is shown post-submit."""
-    for sel in [
-        "select[name*='vehicle' i]", "select[name*='derivative' i]",
-        "[class*='vehicle-picker']", "[class*='vehicle-select']",
-    ]:
-        try:
-            if page.locator(sel).first.is_visible(timeout=500):
-                return True
-        except Exception:
-            pass
-    return False
-
-
-def _select_first_vehicle(page):
-    """Select the first option in the vehicle picker."""
-    try:
-        sel = page.locator("select").first
-        if sel.is_visible(timeout=1000):
-            sel.select_option(index=1)
-            time.sleep(1)
-            for btn_sel in ["button[type='submit']", "button:has-text('Continue')", "button:has-text('Select')"]:
-                try:
-                    btn = page.locator(btn_sel).first
-                    if btn.is_visible(timeout=500):
-                        btn.click()
-                        return
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.debug(f"Vehicle picker error: {e}")
-
-
-def _dismiss_email_gate(page):
-    """Skip any email capture gate."""
-    for sel in [
-        "button:has-text('Skip')", "button:has-text('No thanks')",
-        "button:has-text('Continue without')", "a:has-text('Skip')",
-        "[class*='skip']", "[class*='no-thanks']", "button[aria-label*='close' i]",
-    ]:
-        try:
-            btn = page.locator(sel).first
-            if btn.is_visible(timeout=1000):
-                btn.click(timeout=2000)
-                logger.debug(f"Dismissed email gate: {sel}")
-                return
-        except Exception:
-            pass
-
-
-def _save_screenshot(page, path: str):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    try:
-        page.screenshot(path=path, full_page=False)
-        logger.info(f"Screenshot saved: {path}")
-    except Exception as e:
-        logger.warning(f"Screenshot failed: {e}")
+    def _take_error_screenshot(self, page, name_prefix):
+        import time as _time
+        _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
+        _ss_dir.mkdir(parents=True, exist_ok=True)
+        _ts = _time.strftime("%Y%m%d_%H%M%S")
+        _ss_name = f"{name_prefix}_{_ts}.png"
+        _ss_path = str(_ss_dir / _ss_name)
+        page.screenshot(path=_ss_path, full_page=True)
+        logger.info(f"Error screenshot saved to: {_ss_path}")

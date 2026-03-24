@@ -26,7 +26,7 @@ class IDUScraper:
         username: str,
         password: str,
         session_file: str = "output/sessions/idu_session.json",
-        headless: bool = False,
+        headless: bool = True,
         output_dir: str = "output",
         retry_limit: int = 3,
         slow_mo_ms: int = 0,
@@ -39,7 +39,7 @@ class IDUScraper:
         self.slow_mo_ms = slow_mo_ms
 
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=False, slow_mo=self.slow_mo_ms)
+        self.browser = self.playwright.chromium.launch(headless=True, slow_mo=self.slow_mo_ms)
         self.context: BrowserContext = self.browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -49,26 +49,78 @@ class IDUScraper:
         self.page: Page = self.context.new_page()
 
     def _ensure_logged_in(self) -> None:
-        """Ensure session is logged in, or perform manual login + MFA."""
         try:
             loaded = session_mod.load_session(self.context, self.session_file)
             if loaded:
                 if session_mod.is_session_valid(self.page):
                     logger.info("Session restored, skipping login")
                     return
-            # not valid, perform login
-            self.page.goto("https://sso.tracesmart.co.uk/login/idu", timeout=20000)
+
+            # Step 1 — Go to login page
+            self.page.goto("https://sso.tracesmart.co.uk/login/idu", timeout=30000)
             self.page.wait_for_selector("#username", timeout=20000)
             self.page.fill("#username", self.username)
             self.page.fill("#password", self.password)
             self.page.click('input[data-testid="sign-in"]')
-            print("ACTION REQUIRED: Check your email for the MFA code. Enter it in the browser, submit it, wait until you see the IDU dashboard, then press Enter here...")
-            input()
-            if session_mod.is_session_valid(self.page):
+
+            # Step 2 — Handle "Send One Time Password" page
+            try:
+                self.page.wait_for_selector('[data-testid="otp-send"]', timeout=10000)
+                print("Clicking 'Send One Time Password' automatically...")
+                self.page.click('[data-testid="otp-send"]')
+                self.page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                print("OTP send page not shown, continuing...")
+
+            # Step 3 — Wait for OTP via external injection if available
+            try:
+                self.page.wait_for_selector('[data-testid="otp-code"]', timeout=10000)
+                
+                # Check if we have an external OTP mechanism
+                if hasattr(self, 'otp_event') and hasattr(self, 'otp_value'):
+                    print("Waiting for external OTP injection...")
+                    signaled = self.otp_event.wait(timeout=300)
+                    if signaled:
+                        code = self.otp_value.get("code", "")
+                        if code:
+                            print(f"Injecting OTP code: {code}")
+                            self.page.fill('[data-testid="otp-code"]', code)
+                            self.page.click('[data-testid="otp-submit"]')  # ← FIXED
+                            self.page.wait_for_load_state("networkidle", timeout=30000)
+                        else:
+                            print("OTP event signaled but no code found")
+                    else:
+                        print("Timed out waiting for external OTP")
+                else:
+                    print("Waiting for user to enter OTP in the browser...")
+                    # Wait until the OTP page disappears (user clicked Continue)
+                    self.page.wait_for_selector(
+                        '[data-testid="otp-code"]', 
+                        state="hidden", 
+                        timeout=120000  # wait up to 2 minutes
+                    )
+                    self.page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                pass
+
+            # Step 4 — Handle conflict page automatically
+            try:
+                self.page.wait_for_selector('[data-testid="accept"]', timeout=8000)
+                print("Conflict page detected — signing in automatically...")
+                self.page.click('[data-testid="accept"]')
+                self.page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+
+            # Step 5 — Verify we are now logged in
+            html = self.page.content()
+            if "You are logged in" in html or "Log Out" in html or "newSearch" in self.page.url:
                 session_mod.save_session(self.context, self.session_file)
                 logger.info("Session saved")
                 return
-            raise RuntimeError("Login failed after MFA")
+
+            raise RuntimeError("Login failed — dashboard not detected after MFA")
+
         except Exception:
             logger.exception("Error during login flow")
             raise
@@ -147,15 +199,21 @@ class IDUScraper:
                 self.page.wait_for_load_state("networkidle", timeout=30000)
                 self.page.wait_for_selector("#result-summary-status", timeout=20000)
 
-                screenshot_path = None
-                if screenshot:
-                    self.output_dir.mkdir(parents=True, exist_ok=True)
-                    ts = time.strftime("%Y%m%d_%H%M%S")
-                    screenshot_path = str(self.output_dir / f"idu_{config.reference or config.forename}_{ts}.png")
-                    try:
-                        self.page.screenshot(path=screenshot_path, full_page=True)
-                    except Exception:
-                        logger.exception("Failed to save screenshot")
+                import os, time as _time
+                from pathlib import Path
+                _backend_dir = Path(__file__).parent.parent.parent
+                _ss_dir = _backend_dir / "static" / "screenshots"
+                _ss_dir.mkdir(parents=True, exist_ok=True)
+                _ts = _time.strftime("%Y%m%d_%H%M%S")
+                _ss_name = f"idu_{_ts}.png"
+                _ss_path = str(_ss_dir / _ss_name)
+                try:
+                    self.page.screenshot(path=_ss_path, full_page=True)
+                    screenshot_url = f"/api/files/screenshots/{_ss_name}"
+                    logger.info(f"Screenshot saved to: {_ss_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to capture screenshot: {e}")
+                    screenshot_url = None
 
                 html = self.page.content()
                 soup = parser_mod.BeautifulSoup(html, "lxml")
@@ -200,7 +258,7 @@ class IDUScraper:
                     search_activity = search_activity,
                     address_links = address_links,
                     property_detail = property_detail,
-                    screenshot_path = screenshot_path,
+                    screenshot_url = screenshot_url,
                 )
 
                 return result

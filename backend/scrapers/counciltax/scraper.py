@@ -42,13 +42,13 @@ class CouncilTaxScraper:
         query = CouncilTaxQuery(postcode=postcode)
         return self.search(query)
 
-    def search(self, query: CouncilTaxQuery) -> CouncilTaxResult:
-        postcode = query.postcode.strip().upper()
-        logger.info(f"Searching council tax for postcode: {postcode}")
-
+    def lookup(self, postcode: str) -> CouncilTaxResult:
+        """Entry point for the council tax scraper."""
+        logger.info(f"Looking up council tax for postcode: {postcode}")
+        
         try:
             # Use Playwright to handle JS-rendered pages
-            html = self._fetch_council_tax_html(postcode, headless=True)
+            html, screenshot_url = self._fetch_council_tax_html(postcode, headless=True)
 
             from .parser import parse_properties, parse_error_message
             properties = parse_properties(html, postcode)
@@ -60,6 +60,7 @@ class CouncilTaxScraper:
                     postcode=postcode,
                     scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     properties=[],
+                    screenshot_url=screenshot_url,
                     error=error_msg or "No properties found - check debug/counciltax_last.html",
                 )
 
@@ -67,6 +68,7 @@ class CouncilTaxScraper:
                 postcode=postcode,
                 scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 properties=properties,
+                screenshot_url=screenshot_url,
                 error=None,
             )
 
@@ -76,11 +78,12 @@ class CouncilTaxScraper:
                 postcode=postcode,
                 scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 properties=[],
+                screenshot_url=None,
                 error=str(e),
             )
 
-    def _fetch_council_tax_html(self, postcode: str, headless: bool = True) -> str:
-        """Use Playwright to submit the council tax form and return the results page HTML."""
+    def _fetch_council_tax_html(self, postcode: str, headless: bool = True) -> tuple[str, Optional[str]]:
+        """Use Playwright to submit the council tax form and return (HTML, screenshot_url)."""
         with sync_playwright() as p:
             # Add some arguments to be less detectable and more stable in Linux
             browser = p.chromium.launch(
@@ -121,6 +124,26 @@ class CouncilTaxScraper:
 
                 time.sleep(1)
 
+                # Step 1.5: Dismiss cookie consent if present
+                try:
+                    if page.locator(".fc-consent-root").is_visible(timeout=3000):
+                        logger.info("Cookie consent banner detected")
+                        # Try clicking the accept button first
+                        accept_btn = page.locator(".fc-cta-consent")
+                        if accept_btn.is_visible(timeout=2000):
+                            accept_btn.click()
+                            logger.info("Clicked cookie consent accept button")
+                        else:
+                            # Fallback: remove the overlay elements directly
+                            page.evaluate("""() => {
+                                const elements = document.querySelectorAll('.fc-consent-root, .fc-dialog-overlay');
+                                elements.forEach(el => el.remove());
+                                document.body.style.overflow = 'auto';
+                            }""")
+                            logger.info("Removed cookie consent overlays via JS fallback")
+                except Exception as e:
+                    logger.debug(f"Cookie consent dismissal skipped or failed: {e}")
+
                 # Step 2: Fill postcode input
                 logger.info(f"Filling postcode: {postcode}")
                 page.fill("input[name='postcode']", postcode)
@@ -128,7 +151,11 @@ class CouncilTaxScraper:
 
                 # Step 3: Click the Search button
                 logger.info("Submitting form")
-                page.click("input[name='search'], input[type='submit'], button[type='submit']")
+                # Use JavaScript-based click to bypass pointer-event blocking from any remaining overlays
+                page.eval_on_selector(
+                    "input[name='search'], input[type='submit'], button[type='submit']",
+                    "el => el.click()"
+                )
 
                 # Step 4: Wait for results to load
                 logger.info("Waiting for results page to load")
@@ -156,7 +183,29 @@ class CouncilTaxScraper:
                     f.write(html)
 
                 logger.info(f"Saved results HTML to debug/counciltax_last.html")
-                return html
+                
+                # Screenshot capture
+                import time as _time
+                from pathlib import Path
+                 
+                 # backend/scrapers/counciltax/scraper.py -> backend/static/screenshots
+                _backend_dir = Path(__file__).parent.parent.parent
+                _ss_dir = _backend_dir / "static" / "screenshots"
+                _ss_dir.mkdir(parents=True, exist_ok=True)
+                _ts = _time.strftime("%Y%m%d_%H%M%S")
+                 
+                _ss_name = f"counciltax_{_ts}.png"
+                _ss_path = str(_ss_dir / _ss_name)
+                
+                screenshot_url = None
+                try:
+                    page.screenshot(path=_ss_path, full_page=True)
+                    screenshot_url = f"/api/files/screenshots/{_ss_name}"
+                    logger.info(f"Screenshot saved to: {_ss_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to capture screenshot: {e}")
+ 
+                return html, screenshot_url
 
             except Exception as e:
                 # Save whatever we have for debugging

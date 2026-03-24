@@ -98,7 +98,7 @@ class TaxResult:
     url:             str
     payslip:         list[dict]    = field(default_factory=list)
     summary:         dict          = field(default_factory=dict)
-    screenshot_path: Optional[str] = None
+    screenshot_url:  Optional[str] = None
     error:           Optional[str] = None
 
     @property
@@ -220,7 +220,25 @@ class ListenToTaxmanScraper:
 
                 # ── screenshot after real values confirmed ─────────────────────
                 if screenshot:
-                    result.screenshot_path = self._take_screenshot(config.salary)
+                    import time as _time
+                    from pathlib import Path
+                    
+                    # BACKEND_DIR is backend/
+                    _backend_dir = Path(__file__).parent.parent
+                    _ss_dir = _backend_dir / "static" / "screenshots"
+                    _ss_dir.mkdir(parents=True, exist_ok=True)
+                    _ts = _time.strftime("%Y%m%d_%H%M%S")
+                    
+                    _ss_name = f"taxman_{_ts}.png"
+                    _ss_path = str(_ss_dir / _ss_name)
+                    
+                    try:
+                        self._page.screenshot(path=_ss_path, full_page=True)
+                        result.screenshot_url = f"/api/files/screenshots/{_ss_name}"
+                        logger.info(f"Screenshot saved to: {_ss_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to capture screenshot: {e}")
+                        result.screenshot_url = None
 
                 if not result.payslip:
                     raise ValueError(

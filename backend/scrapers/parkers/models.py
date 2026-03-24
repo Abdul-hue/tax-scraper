@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict
 import json
 
 InputMethod = Literal["registration", "dropdown"]
@@ -40,10 +40,11 @@ class ParkersConfig:
 @dataclass
 class ValuationPrices:
     """Price range from free Parkers valuation."""
-    private_low:   str = ""   # e.g. "£2,995"
-    private_high:  str = ""   # e.g. "£4,185"
-    dealer_low:    str = ""   # e.g. "£4,890"
-    dealer_high:   str = ""   # e.g. "£5,790"
+    private_low:      Optional[str] = None
+    private_high:     Optional[str] = None
+    dealer_low:       Optional[str] = None
+    dealer_high:      Optional[str] = None
+    part_exchange:    Optional[str] = None
 
 @dataclass
 class ParkersResult:
@@ -52,29 +53,25 @@ class ParkersResult:
     Always returned — check .success before consuming .prices.
     Backend-ready: call .to_dict() or .to_json().
     """
-    config:          dict
-    scraped_at:      str
-    input_method:    str    = ""
+    plate:           str    = ""
+    config:          dict   = field(default_factory=dict)
+    scraped_at:      str    = ""
+    reg_plate:       str    = ""
     make:            str    = ""
-    range_name:      str    = ""
     model:           str    = ""
     year:            str    = ""
-    reg_plate:       str    = ""
-    fuel_type:       str    = ""
-    transmission:    str    = ""
+    vehicle_version: str    = ""
+    vehicle_full_name: str  = ""
+    vehicle_image:   str    = ""
+    vehicle_details: Dict[str, str] = field(default_factory=dict)
     prices:          ValuationPrices = field(default_factory=ValuationPrices)
-    mileage_assumption: str = "10,000 miles/year (standard)"
-    spec_assumption: str    = "Standard factory equipment"
-    result_url:      str    = ""
-    screenshot_path: Optional[str] = None
+    screenshot_url:  Optional[str] = None
     error:           Optional[str] = None
+    message:         Optional[str] = None
 
     @property
     def success(self) -> bool:
-        return (
-            self.error is None and
-            bool(self.prices.private_low or self.prices.dealer_low)
-        )
+        return self.error is None
 
     def to_dict(self) -> dict:
         return asdict(self)

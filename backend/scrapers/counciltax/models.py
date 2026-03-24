@@ -28,6 +28,7 @@ class CouncilTaxResult:
     postcode:    str
     scraped_at:  str
     properties:  list[PropertyRecord] = field(default_factory=list)
+    screenshot_url: Optional[str]     = None
     error:       Optional[str]        = None
 
     @property
