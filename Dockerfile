@@ -16,6 +16,10 @@ RUN npm run build
 # ──────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
+# Prevent python from writing pyc files and keep stdout unbuffered
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx \
@@ -35,9 +39,10 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers and all system dependencies
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# Install Playwright browsers and all system dependencies, then clean up
+RUN playwright install chromium \
+    && playwright install-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy backend source code
 COPY backend/ ./
