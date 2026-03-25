@@ -428,6 +428,14 @@ function App() {
 
                     {activeTab === 'landregistry' && (
                         <div className="form-grid">
+                            <div className="form-group">
+                                <label>Username</label>
+                                <input type="text" className="input-field" value={lrData.username} onChange={e => updateLrData('username', e.target.value)} />
+                            </div>
+                            <div className="form-group">
+                                <label>Password</label>
+                                <input type="password" className="input-field" value={lrData.password} onChange={e => updateLrData('password', e.target.value)} />
+                            </div>
                             <div className="form-group" style={{ gridColumn: 'span 2' }}>
                                 <label>Customer Reference</label>
                                 <input type="text" className="input-field" value={lrData.customer_reference} onChange={e => updateLrData('customer_reference', e.target.value)} />

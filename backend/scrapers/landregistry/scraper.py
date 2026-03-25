@@ -36,12 +36,11 @@ class LandRegistryScraper:
 
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
         import os
-        username = os.getenv("LAND_REGISTRY_USERNAME")
-        password = os.getenv("LAND_REGISTRY_PASSWORD")
+        username = query.username
+        password = query.password
 
         if not username or not password:
-            logger.error("CRITICAL ERROR: Land Registry credentials are not set in environment variables! Please check your docker-compose.yml.")
-            raise Exception("Land Registry credentials missing. Check server logs.")
+            raise Exception("Land Registry Username and Password are required. Please enter them in the form.")
         
         result = LandRegistryResult(
             scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
