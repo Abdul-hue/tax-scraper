@@ -78,7 +78,7 @@ class LandRegistryScraper:
                     "--disable-dev-shm-usage",
                     "--start-maximized",
                 ],
-                "ignore_default_args": ["--enable-automation", "--no-sandbox"],
+                "ignore_default_args": ["--enable-automation"],
                 "accept_downloads": True,
             }
                 import sys
