@@ -1,4 +1,4 @@
-﻿﻿__pycache__/
+﻿__pycache__/
 *.pyc
 .env
 .venv/
@@ -12,3 +12,4 @@ backend/scrapers/__pycache__/
 *.png
 node_modules/
 dist/
+backend/.env
