@@ -17,8 +17,6 @@ PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 class LandRegistryScraper:
     def __init__(self, config=None, headless: bool = None):
         import os
-        from dotenv import load_dotenv
-        load_dotenv()
         if headless is None:
             self.headless = os.getenv("HEADLESS", "true").lower() == "true"
         else:
@@ -38,8 +36,6 @@ class LandRegistryScraper:
 
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
         import os
-        from dotenv import load_dotenv
-        load_dotenv()
         username = os.getenv("LAND_REGISTRY_USERNAME")
         password = os.getenv("LAND_REGISTRY_PASSWORD")
 
