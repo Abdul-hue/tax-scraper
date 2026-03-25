@@ -7,9 +7,13 @@ backend/chrome_profile/
 backend/debug/
 backend/downloads/
 backend/output/
+backend/static/screenshots/
 backend/__pycache__/
-backend/scrapers/__pycache__/
+chrome_profile/
+debug/
+downloads/
+output/
+static/screenshots/
 *.png
 node_modules/
 dist/
-backend/.env
