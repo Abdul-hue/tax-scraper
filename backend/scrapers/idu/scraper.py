@@ -49,7 +49,7 @@ class IDUScraper:
 
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
-            headless=False, 
+            headless=getattr(self, "headless", True), 
             slow_mo=self.slow_mo_ms,
             args=get_browser_args()
         )
@@ -195,7 +195,7 @@ class IDUScraper:
                     # re-initialize fresh
                     try:
                         self.browser = self.playwright.chromium.launch(
-                            headless=False, 
+                            headless=getattr(self, "headless", True), 
                             slow_mo=self.slow_mo_ms,
                             args=get_browser_args()
                         )
