@@ -13,7 +13,7 @@ services:
       - PYTHONUNBUFFERED=1
       - PORT=7887
       - CHROMIUM_FLAGS=--no-sandbox --disable-dev-shm-usage
-      - HEADLESS=true
+      - HEADLESS=false
     volumes:
       - scraper_screenshots:/app/static/screenshots
       - scraper_chrome_profile:/app/chrome_profile
