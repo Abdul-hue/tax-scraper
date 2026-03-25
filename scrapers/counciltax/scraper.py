@@ -9,6 +9,7 @@ from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 
 from .models import CouncilTaxQuery, CouncilTaxResult, PropertyRecord
+from ..common.browser import get_browser_args
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,15 @@ HEADERS = {
 
 
 class CouncilTaxScraper:
-    def __init__(self, config=None):
+    def __init__(self, config=None, headless: bool = None):
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
         self.config = config
+        if headless is None:
+            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+        else:
+            self.headless = headless
 
     def __enter__(self):
         return self
@@ -85,14 +93,10 @@ class CouncilTaxScraper:
     def _fetch_council_tax_html(self, postcode: str, headless: bool = True) -> tuple[str, Optional[str]]:
         """Use Playwright to submit the council tax form and return (HTML, screenshot_url)."""
         with sync_playwright() as p:
-            # Add some arguments to be less detectable and more stable in Linux
+            # Use common browser arguments for stability
             browser = p.chromium.launch(
                 headless=headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                ]
+                args=get_browser_args()
             )
             context = browser.new_context(
                 user_agent=(
@@ -124,6 +128,26 @@ class CouncilTaxScraper:
 
                 time.sleep(1)
 
+                # Step 1.5: Dismiss cookie consent if present
+                try:
+                    if page.locator(".fc-consent-root").is_visible(timeout=3000):
+                        logger.info("Cookie consent banner detected")
+                        # Try clicking the accept button first
+                        accept_btn = page.locator(".fc-cta-consent")
+                        if accept_btn.is_visible(timeout=2000):
+                            accept_btn.click()
+                            logger.info("Clicked cookie consent accept button")
+                        else:
+                            # Fallback: remove the overlay elements directly
+                            page.evaluate("""() => {
+                                const elements = document.querySelectorAll('.fc-consent-root, .fc-dialog-overlay');
+                                elements.forEach(el => el.remove());
+                                document.body.style.overflow = 'auto';
+                            }""")
+                            logger.info("Removed cookie consent overlays via JS fallback")
+                except Exception as e:
+                    logger.debug(f"Cookie consent dismissal skipped or failed: {e}")
+
                 # Step 2: Fill postcode input
                 logger.info(f"Filling postcode: {postcode}")
                 page.fill("input[name='postcode']", postcode)
@@ -131,7 +155,11 @@ class CouncilTaxScraper:
 
                 # Step 3: Click the Search button
                 logger.info("Submitting form")
-                page.click("input[name='search'], input[type='submit'], button[type='submit']")
+                # Use JavaScript-based click to bypass pointer-event blocking from any remaining overlays
+                page.eval_on_selector(
+                    "input[name='search'], input[type='submit'], button[type='submit']",
+                    "el => el.click()"
+                )
 
                 # Step 4: Wait for results to load
                 logger.info("Waiting for results page to load")

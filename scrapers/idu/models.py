@@ -88,13 +88,17 @@ class IDUResult:
             "search_id": self.search_id,
             "verdict": self.verdict,
             "score": self.score,
-            "summary_items": self.summary_items,
+            "date_of_search": self.date_of_search,
+            "summary_items": [
+                {"category": item.category, "label": item.label, "status": item.status} 
+                for item in self.summary_items
+            ],
             "address_detail": self.address_detail,
             "credit_active": self.credit_active,
             "dob_verification": self.dob_verification,
             "mortality": self.mortality,
             "gone_away": self.gone_away,
-            "pep_entries": self.pep_entries,
+            "pep_entries": [asdict(pep) for pep in self.pep_entries],
             "sanction_result": self.sanction_result,
             "ccj": self.ccj,
             "insolvency": self.insolvency,

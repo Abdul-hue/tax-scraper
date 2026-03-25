@@ -10,48 +10,8 @@
     "sameSite": "None"
   },
   {
-    "name": "tmx_guid",
-    "value": "AAyQvHC3WlSySsX4hA_cpIZVhFZaXUkh9FXLKhnT8es48KihPn9g9EXWjGDL8uAko-La1GvHcXfZd5xPdQgrIj7XptWuEw",
-    "domain": "content.sso.tracesmart.co.uk",
-    "path": "/",
-    "expires": 1808429491.461644,
-    "httpOnly": true,
-    "secure": true,
-    "sameSite": "None"
-  },
-  {
-    "name": "AWSALB",
-    "value": "lQsEj0gzlwvTx2HAphl0+h98MIN62lwdqZgplaynB6MPKteObgmAUYj/4aRYkmGzrbFUbK8lOe32w9CnXUHfv+gmVQuv4XRlGTucREM4P8BsTHIvNVTRwVPkUOp0",
-    "domain": "sso.tracesmart.co.uk",
-    "path": "/",
-    "expires": 1774474324.755707,
-    "httpOnly": false,
-    "secure": false,
-    "sameSite": "Lax"
-  },
-  {
-    "name": "AWSALBCORS",
-    "value": "lQsEj0gzlwvTx2HAphl0+h98MIN62lwdqZgplaynB6MPKteObgmAUYj/4aRYkmGzrbFUbK8lOe32w9CnXUHfv+gmVQuv4XRlGTucREM4P8BsTHIvNVTRwVPkUOp0",
-    "domain": "sso.tracesmart.co.uk",
-    "path": "/",
-    "expires": 1774474324.755881,
-    "httpOnly": false,
-    "secure": true,
-    "sameSite": "None"
-  },
-  {
-    "name": "sso_session",
-    "value": "eyJpdiI6ImlpZjFQUW5vQzB3QzR3bnZRSnF5UlE9PSIsInZhbHVlIjoiSm1XOVBQa0V4dzF0Y3RYTWl5OVJmaktCdUw1MkM1WW1TUzMwSFJodlZQek9sbmZDell3UDFSUnNsb09tVzBlUmVyNkVMYVBJQkxSclBTUzRIblQrQUp3L3JVRFpVbVJUM24rRWpzUWQ5ZUlvOHZ2VFBKZytsczkxem1ZU0pxQ2YiLCJtYWMiOiI3N2JmNzliOTVjYzA5ZGViMzI3ODNmNzM2NDhhYjU2Njc4ZWZmYWRmZTFlNWUxZmJkNzhkYTk3MTg3ODJiYjRmIiwidGFnIjoiIn0%3D",
-    "domain": "sso.tracesmart.co.uk",
-    "path": "/",
-    "expires": 1773870724.755967,
-    "httpOnly": true,
-    "secure": true,
-    "sameSite": "None"
-  },
-  {
     "name": "PHPSESSID",
-    "value": "trqo8u0pv7hd6qskas7q6fdcpd",
+    "value": "tmm9up5ggpjj3ptmht02tr6mar",
     "domain": "idu.tracesmart.co.uk",
     "path": "/",
     "expires": -1,
@@ -60,21 +20,61 @@
     "sameSite": "Strict"
   },
   {
-    "name": "AWSALB",
-    "value": "MJ0N+xJiI4qAiT0qtBnQZ6bJDpBBCxWmoyfkGE3ZJGIyy1Bf6Dr2AUs3b8BWoKmy3uhYhStPYES44pK83n7+XtQ7l4ilf4W2ym9l2Z8FaKJhUAXdeevJ+9OnZ9MT",
-    "domain": "idu.tracesmart.co.uk",
+    "name": "tmx_guid",
+    "value": "AAxzmDMy0E71bi_wtDZm3rjELCmib2VTWzFqw1SWxcxaC1wagjqIMxQ4Sg3CvZogxpo_g8Y2PZ9Pa_d-LuMaVDjt00srXA",
+    "domain": "content.sso.tracesmart.co.uk",
     "path": "/",
-    "expires": 1774474326.329112,
+    "expires": 1808956892.333654,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "AWSALB",
+    "value": "Z4iLZ/1gas9k74+9mPL32YV70ov6RXuQS0GKH3oxG5hi7M7tpsBR4pDSxdsdq9z5s1xTw4MlcU3IAJpIuNP5uGVx3auYjfLFklJWXDISRvv01B1nQvyFHNLBGRTR",
+    "domain": "sso.tracesmart.co.uk",
+    "path": "/",
+    "expires": 1775001727.140189,
     "httpOnly": false,
     "secure": false,
     "sameSite": "Lax"
   },
   {
     "name": "AWSALBCORS",
-    "value": "MJ0N+xJiI4qAiT0qtBnQZ6bJDpBBCxWmoyfkGE3ZJGIyy1Bf6Dr2AUs3b8BWoKmy3uhYhStPYES44pK83n7+XtQ7l4ilf4W2ym9l2Z8FaKJhUAXdeevJ+9OnZ9MT",
+    "value": "Z4iLZ/1gas9k74+9mPL32YV70ov6RXuQS0GKH3oxG5hi7M7tpsBR4pDSxdsdq9z5s1xTw4MlcU3IAJpIuNP5uGVx3auYjfLFklJWXDISRvv01B1nQvyFHNLBGRTR",
+    "domain": "sso.tracesmart.co.uk",
+    "path": "/",
+    "expires": 1775001727.140381,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "sso_session",
+    "value": "eyJpdiI6Im8wU253Qi9jdUgyVjV1S0ZXQUZpdFE9PSIsInZhbHVlIjoicW1UTmRPMUpsSTF6eHRLd1RKSjY3VGF0M3ZZbnJJVmcrdEkyNVpPNXlyOGpTUmtjWDR4ektrTXBteU1Lc21vSG9mU2NvMnB0VHJ6OEk4dEtmMytpMTlaeDYwbDAzRE02UHFKdFRaMWNMc2VxK0tMNCt4VEhDeGdxdFljL093Y1YiLCJtYWMiOiIwOWEzYmJkNTdhMjhmYmJiM2YyMjVkMzYyMDIyZjUxNDdkYWRkOTA4M2I5OTJlZmRlODFkZTNiYjY3M2ZlNWQyIiwidGFnIjoiIn0%3D",
+    "domain": "sso.tracesmart.co.uk",
+    "path": "/",
+    "expires": 1774398127.140454,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "AWSALB",
+    "value": "i2jdEeU2l0BJAn/rZ2IQRJ0bZgBzlosFIqa8p0AnE244Oek9rqxnEmMI1/x3wISUGe11Is1b/EvSsBKeOpUXDPxwmkK78CPQ4AZyIdUlXC0TQMjHsU4vvdAV1t8B",
     "domain": "idu.tracesmart.co.uk",
     "path": "/",
-    "expires": 1774474326.329248,
+    "expires": 1775001730.069825,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "AWSALBCORS",
+    "value": "i2jdEeU2l0BJAn/rZ2IQRJ0bZgBzlosFIqa8p0AnE244Oek9rqxnEmMI1/x3wISUGe11Is1b/EvSsBKeOpUXDPxwmkK78CPQ4AZyIdUlXC0TQMjHsU4vvdAV1t8B",
+    "domain": "idu.tracesmart.co.uk",
+    "path": "/",
+    "expires": 1775001730.070053,
     "httpOnly": false,
     "secure": true,
     "sameSite": "None"

@@ -6,11 +6,48 @@ from scrapers.listentotaxman import ListenToTaxmanScraper, ScrapeConfig as TaxSc
 import asyncio
 import threading
 import uuid
+import logging
+import json
+import os
+import time
+from pathlib import Path
 
-# Global session/result storage for IDU OTP flow
+logger = logging.getLogger(__name__)
+
+# Global session storage for IDU OTP flow
+# active_idu_sessions remains in-memory because it holds live Playwright/Browser objects 
+# which cannot be serialized to disk. However, active_idu_results is now file-based.
 active_idu_sessions = {}  # session_id -> IDUScraper instance
-active_idu_results = {}   # session_id -> { "status": "processing" | "complete" | "error", "result": ... }
 
+# File-based result storage
+SESSION_RESULT_DIR = Path("backend/output/sessions/results")
+SESSION_RESULT_DIR.mkdir(parents=True, exist_ok=True)
+
+def _get_result_path(session_id: str) -> Path:
+    return SESSION_RESULT_DIR / f"{session_id}.json"
+
+def _save_idu_result(session_id: str, data: dict):
+    path = _get_result_path(session_id)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def _load_idu_result(session_id: str) -> dict:
+    path = _get_result_path(session_id)
+    if not path.exists():
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def _cleanup_old_sessions(max_age_seconds: int = 3600):
+    """Delete session result files older than max_age_seconds."""
+    now = time.time()
+    for file in SESSION_RESULT_DIR.glob("*.json"):
+        if now - file.stat().st_mtime > max_age_seconds:
+            try:
+                file.unlink()
+                logger.info(f"Cleaned up expired session result: {file.name}")
+            except Exception as e:
+                logger.warning(f"Failed to delete expired session file {file}: {e}")
 
 async def run_tax_scraper(
     salary: int,
@@ -261,26 +298,28 @@ async def run_idu_scraper_start(
 
     def _background_worker(sid, user, pwd, conf):
         try:
-            active_idu_results[sid] = {"status": "processing"}
-            scraper = IDUScraper(username=user, password=pwd, headless=False)
+            _cleanup_old_sessions()
+            _save_idu_result(sid, {"status": "processing"})
+            scraper = IDUScraper(username=user, password=pwd, headless=True)
             
             # Setup OTP sync mechanism
             scraper.otp_event = threading.Event()
             scraper.otp_value = {"code": ""}
+            scraper.session_id = sid  # Attach session_id for status communication
             active_idu_sessions[sid] = scraper
             
             # Start search (which will call _ensure_logged_in and wait for otp_event)
             result = scraper.search(conf, screenshot=True)
             
-            active_idu_results[sid] = {
+            _save_idu_result(sid, {
                 "status": "complete",
                 "result": result.to_dict()
-            }
+            })
         except Exception as e:
-            active_idu_results[sid] = {
+            _save_idu_result(sid, {
                 "status": "error",
                 "message": str(e)
-            }
+            })
         finally:
             # Cleanup session after processing
             if sid in active_idu_sessions:
@@ -299,7 +338,7 @@ async def run_idu_scraper_start(
     )
     thread.start()
     
-    return {"session_id": session_id, "status": "awaiting_otp"}
+    return {"session_id": session_id, "status": "processing"}
 
 
 async def run_idu_scraper_submit_otp(session_id: str, otp: str):
@@ -320,10 +359,12 @@ async def run_idu_scraper_get_result(session_id: str):
     """
     Step 3: Poll for IDU result.
     """
-    if session_id not in active_idu_results:
+    _cleanup_old_sessions()
+    result = _load_idu_result(session_id)
+    if not result:
         return {"status": "error", "message": "Session not found"}
     
-    return active_idu_results[session_id]
+    return result
 
 
 async def run_idu_scraper(
@@ -378,7 +419,7 @@ async def run_idu_scraper(
 
     def _run_idu_sync(user, pwd, conf):
         try:
-            scraper = IDUScraper(username=user, password=pwd, headless=False)
+            scraper = IDUScraper(username=user, password=pwd, headless=True)
             result = scraper.search(conf)
             return result.to_dict()
         except Exception as e:

@@ -43,15 +43,22 @@ def load_session(context, path: Union[str, Path]) -> bool:
         return False
 
 
-def is_session_valid(page, timeout_ms: int = 8000) -> bool:
+def is_session_valid(page, timeout_ms: int = 30000) -> bool:
     """Check if we are already logged in by looking for logout or message.
 
     Returns True if logged in, False if redirected to SSO login page.
     """
     try:
+        # Increase timeout and wait for networkidle for better stability in production
         page.goto("https://idu.tracesmart.co.uk/", timeout=timeout_ms)
         try:
-            page.wait_for_selector("#hd-logout-button", timeout=timeout_ms)
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            logger.debug("Network did not go idle during session validation, continuing...")
+
+        try:
+            # Check for dashboard indicators
+            page.wait_for_selector("#hd-logout-button, .newSearch", timeout=10000)
             return True
         except Exception:
             # fallback: look for textual indicator
@@ -59,6 +66,6 @@ def is_session_valid(page, timeout_ms: int = 8000) -> bool:
             if "You are logged in" in html:
                 return True
             return False
-    except Exception:
-        logger.exception("Error while validating session")
+    except Exception as e:
+        logger.warning(f"Session validation failed: {e}")
         return False

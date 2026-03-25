@@ -1,8 +1,12 @@
+import logging
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from playwright.sync_api import sync_playwright
 from .models import LpsQuery, LpsResult, LpsProperty, LpsPropertyDetail
+from ..common.browser import get_browser_args
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://valuationservices.finance-ni.gov.uk"
 
@@ -17,6 +21,15 @@ HEADERS = {
 }
 
 class LpsScraper:
+    def __init__(self, config=None, headless: bool = None):
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        if headless is None:
+            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+        else:
+            self.headless = headless
+
     def scrape(self, query: LpsQuery) -> LpsResult:
         session = requests.Session()
         session.get(f"{BASE_URL}/Property/Search", headers=HEADERS)
@@ -98,7 +111,10 @@ class LpsScraper:
             
             try:
                 with sync_playwright() as p:
-                    browser = p.chromium.launch(headless=True)
+                    browser = p.chromium.launch(
+                        headless=getattr(self, "headless", True),
+                        args=get_browser_args()
+                    )
                     context = browser.new_context(viewport={"width": 1280, "height": 1024})
                     page = context.new_page()
                     
