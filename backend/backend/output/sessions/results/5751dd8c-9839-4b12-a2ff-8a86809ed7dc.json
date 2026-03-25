@@ -1,8 +1,8 @@
 {
   "status": "complete",
   "result": {
-    "scraped_at": "2026-03-25 00:24:02",
-    "search_id": "3238575481",
+    "scraped_at": "2026-03-25 04:06:11",
+    "search_id": "3238694621",
     "verdict": "Refer",
     "score": "0",
     "date_of_search": "",
@@ -66,7 +66,7 @@
     "address_detail": {
       "Address": {
         "value": [
-          "2 DENSHAW DRIVE",
+          "6 DENSHAW DRIVE",
           "MORLEY",
           "LEEDS LS27 8RR"
         ],
@@ -455,24 +455,27 @@
     "address_links": [],
     "property_detail": {
       "Property Description": {
-        "value": "",
+        "value": "SEMI-DETACHED",
         "status": "not_verified"
       },
       "Tenure": {
-        "value": "",
+        "value": "FREEHOLD",
         "status": "not_verified"
       },
       "Transfer Date": {
-        "value": "",
+        "value": "29/10/2010",
         "status": "not_verified"
       },
       "Purchase Price": {
-        "value": "",
+        "value": [
+          "£118",
+          "500"
+        ],
         "status": "not_verified"
       },
       "neighbourhood": "These neighbourhoods tend to be concentrated in the old industrial heartlands. They contain many retired couples and widowers living in council owned terraced and semi-detached cheaper property. Many used to work in manufacturing and the old industrial industries of mining and steel. This is still a relatively young group and many still own and run a car but health problems are common."
     },
-    "screenshot_url": "/api/files/screenshots/idu_20260325_002402.png",
+    "screenshot_url": "/api/files/screenshots/idu_20260325_040610.png",
     "error": null
   }
 }

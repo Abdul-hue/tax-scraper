@@ -1,8 +1,8 @@
 {
   "status": "complete",
   "result": {
-    "scraped_at": "2026-03-25 00:15:20",
-    "search_id": "3238569241",
+    "scraped_at": "2026-03-25 05:03:13",
+    "search_id": "3238713811",
     "verdict": "Refer",
     "score": "0",
     "date_of_search": "",
@@ -448,9 +448,9 @@
       "Match Type": "No matches found"
     },
     "search_activity": {
-      "1 Month": "No matches found",
-      "3 Months": "No matches found",
-      "6 Months": "No matches found"
+      "1 Month": "(4)",
+      "3 Months": "(4)",
+      "6 Months": "(4)"
     },
     "address_links": [],
     "property_detail": {
@@ -472,7 +472,7 @@
       },
       "neighbourhood": "These neighbourhoods tend to be concentrated in the old industrial heartlands. They contain many retired couples and widowers living in council owned terraced and semi-detached cheaper property. Many used to work in manufacturing and the old industrial industries of mining and steel. This is still a relatively young group and many still own and run a car but health problems are common."
     },
-    "screenshot_url": "/api/files/screenshots/idu_20260325_001520.png",
+    "screenshot_url": "/api/files/screenshots/idu_20260325_050313.png",
     "error": null
   }
 }

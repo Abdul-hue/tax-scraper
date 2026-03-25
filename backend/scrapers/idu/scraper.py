@@ -27,7 +27,7 @@ class IDUScraper:
         username: str,
         password: str,
         session_file: str = "output/sessions/idu_session.json",
-        headless: bool = True,
+        headless: bool = None,
         output_dir: str = "output",
         retry_limit: int = 3,
         slow_mo_ms: int = 0,
@@ -39,11 +39,17 @@ class IDUScraper:
         self.retry_limit = retry_limit
         self.slow_mo_ms = slow_mo_ms
         self.otp_used = False
-        self.headless = headless
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        if headless is None:
+            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+        else:
+            self.headless = headless
 
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
-            headless=headless, 
+            headless=False, 
             slow_mo=self.slow_mo_ms,
             args=get_browser_args()
         )
@@ -189,7 +195,7 @@ class IDUScraper:
                     # re-initialize fresh
                     try:
                         self.browser = self.playwright.chromium.launch(
-                            headless=self.headless, 
+                            headless=False, 
                             slow_mo=self.slow_mo_ms,
                             args=get_browser_args()
                         )

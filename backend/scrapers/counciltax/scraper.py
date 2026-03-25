@@ -29,8 +29,15 @@ HEADERS = {
 
 
 class CouncilTaxScraper:
-    def __init__(self, config=None):
+    def __init__(self, config=None, headless: bool = None):
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
         self.config = config
+        if headless is None:
+            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+        else:
+            self.headless = headless
 
     def __enter__(self):
         return self

@@ -3,8 +3,9 @@ from playwright_stealth import Stealth
 from datetime import datetime, timezone
 import os, random, time as _time, logging
 from pathlib import Path
-from .models import LandRegistryQuery, LandRegistryResult
-from ..common.browser import get_browser_args
+from scrapers.landregistry.models import LandRegistryQuery, LandRegistryResult
+from scrapers.common.browser import get_browser_args
+from scrapers.landregistry.pdf_parser import parse_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,15 @@ PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 
 
 class LandRegistryScraper:
+    def __init__(self, config=None, headless: bool = None):
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        if headless is None:
+            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+        else:
+            self.headless = headless
+
     def _cleanup_profile(self, profile_path: Path):
         """Delete stale lock files from the profile directory."""
         lock_files = ["SingletonLock", "SingletonCookie", "SingletonSocket"]
@@ -27,9 +37,11 @@ class LandRegistryScraper:
                     logger.warning(f"Could not delete lock file {lock_file}: {e}")
 
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
-        # HARDCODED CREDENTIALS
-        username = "TWilkinson3093"
-        password = "James123."
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        username = os.getenv("LAND_REGISTRY_USERNAME")
+        password = os.getenv("LAND_REGISTRY_PASSWORD")
         
         result = LandRegistryResult(
             scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -38,12 +50,12 @@ class LandRegistryScraper:
         os.makedirs(PROFILE_DIR, exist_ok=True)
 
         try:
-            # 1. Clean Postcode
-            postcode = query.postcode.strip().upper()
+            # 1. Clean Postcode — guard against None
+            postcode = (query.postcode or "").strip().upper()
             
-            # 2. Combine Flat and House if both present
-            house_field = query.house.strip()
-            flat_field = query.flat.strip()
+            # 2. Combine Flat and House if both present — guard against None
+            house_field = (query.house or "").strip()
+            flat_field = (query.flat or "").strip()
             
             address_line_1 = ""
             if flat_field and house_field:
@@ -57,14 +69,19 @@ class LandRegistryScraper:
             self._cleanup_profile(user_data_path)
 
             with sync_playwright() as p:
-                # Use common browser arguments for stability
                 launch_args = {
-                    "user_data_dir": str(user_data_path),
-                    "headless": True,
-                    "args": get_browser_args() + ["--no-first-run", "--disable-software-rasterizer"],
-                    "ignore_default_args": ["--enable-automation"],
-                    "accept_downloads": True,
-                }
+                "user_data_dir": str(user_data_path),
+                "channel": "chrome",
+                "headless": getattr(self, "headless", False),
+                "args": [
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--start-maximized",
+                ],
+                "ignore_default_args": ["--enable-automation", "--no-sandbox"],
+                "accept_downloads": True,
+            }
 
                 try:
                     logger.info(f"Launching browser with profile: {user_data_path}")
@@ -76,7 +93,10 @@ class LandRegistryScraper:
                     self._cleanup_profile(user_data_path)
                     context = p.chromium.launch_persistent_context(**launch_args)
 
-                page = context.new_page()
+                if len(context.pages) > 0:
+                    page = context.pages[0]
+                else:
+                    page = context.new_page()
                 Stealth().apply_stealth_sync(page)
 
                 # STEP 1: Navigate to eservices root
@@ -86,36 +106,51 @@ class LandRegistryScraper:
                 page.mouse.wheel(0, random.randint(100, 300))
                 page.wait_for_timeout(random.randint(500, 1500))
 
-                # STEP 2: Login
-                page.wait_for_selector("input#username", timeout=120000)
-                page.wait_for_timeout(random.randint(500, 1500))
-                for char in username:
-                    page.type("input#username", char, delay=random.randint(50, 150))
-                page.wait_for_timeout(random.randint(300, 700))
-                for char in password:
-                    page.type("input#password", char, delay=random.randint(50, 150))
-                page.wait_for_timeout(random.randint(500, 1000))
-                sign_in = page.locator("input[value='Sign in']")
-                sign_in.hover()
-                page.wait_for_timeout(random.randint(200, 500))
-                sign_in.click()
-                page.wait_for_load_state("domcontentloaded")
-                page.wait_for_timeout(5000)
+                def _do_login(pg):
+                    """Perform PKMS login if the login form is currently visible."""
+                    try:
+                        pg.wait_for_selector("input#username", timeout=5000)
+                    except Exception:
+                        logger.info("No login form present — already authenticated")
+                        return  # already logged in
 
-                # STEP 3: Handle "already signed in somewhere else"
-                if "pkmsdisplace" in page.content() or "already signed in" in page.content().lower():
-                    page.click("a[href='/pkmsdisplace']")
-                    page.wait_for_load_state("domcontentloaded")
-                    page.wait_for_timeout(4000)
+                    logger.info("Login form detected — logging in...")
+                    pg.wait_for_timeout(random.randint(500, 1500))
+                    for char in username:
+                        pg.type("input#username", char, delay=random.randint(50, 150))
+                    pg.wait_for_timeout(random.randint(300, 700))
+                    for char in password:
+                        pg.type("input#password", char, delay=random.randint(50, 150))
+                    pg.wait_for_timeout(random.randint(500, 1000))
+                    sign_in = pg.locator("input[value='Sign in']")
+                    sign_in.hover()
+                    pg.wait_for_timeout(random.randint(200, 500))
+                    sign_in.click()
+                    pg.wait_for_load_state("domcontentloaded")
+                    pg.wait_for_timeout(5000)
 
-                try:
-                    page.wait_for_function(
-                        "() => !window.location.href.includes('pkmslogin')",
-                        timeout=30000
-                    )
-                except:
-                    raise Exception("Login failed — check username and password")
+                    # Handle "already signed in somewhere else"
+                    if "pkmsdisplace" in pg.content() or "already signed in" in pg.content().lower():
+                        try:
+                            pg.click("a[href='/pkmsdisplace']", timeout=5000)
+                            pg.wait_for_load_state("domcontentloaded")
+                            pg.wait_for_timeout(4000)
+                        except Exception as e:
+                            logger.warning(f"pkmsdisplace redirect failed: {e}")
 
+                    # Verify we left the login page
+                    try:
+                        pg.wait_for_function(
+                            "() => !window.location.href.includes('pkmslogin')",
+                            timeout=30000
+                        )
+                        logger.info("Login successful")
+                    except Exception:
+                        self._take_error_screenshot(pg, "landregistry_login_captcha_or_error")
+                        raise Exception("Login failed — check username and password")
+
+                # STEP 2: Login at homepage if session has expired
+                _do_login(page)
                 page.wait_for_timeout(2000)
 
                 # STEP 4: Navigate to Request Official Copies
@@ -125,8 +160,30 @@ class LandRegistryScraper:
                     timeout=60000
                 )
                 page.wait_for_timeout(2000)
-                page.wait_for_selector("form[name='OCForm']", timeout=30000)
+
+                # The ECOCS URL may redirect back to PKMS login if the session expired
+                # mid-flight — detect and re-login on demand
+                if "pkmslogin" in page.url or page.locator("input#username").is_visible():
+                    logger.warning("Redirected to login after ECOCS navigation — re-logging in")
+                    _do_login(page)
+                    page.goto(
+                        f"{BASE}/eservices/ECOCS_OfficialCopies/ocs/init.do?id=oc_link",
+                        wait_until="domcontentloaded",
+                        timeout=60000
+                    )
+                    page.wait_for_timeout(2000)
+
+                # Now the OC form should be visible
+                try:
+                    page.wait_for_selector("form[name='OCForm']", timeout=120000)
+                except Exception:
+                    self._take_error_screenshot(page, "landregistry_ocform_missing")
+                    raise Exception(
+                        f"OCForm not found after login. Current URL: {page.url}. "
+                        "The ECOCS service may be down or the credentials invalid."
+                    )
                 page.wait_for_timeout(1000)
+
 
                 # STEP 5: Fill property search form
                 if query.title_number:
@@ -145,7 +202,15 @@ class LandRegistryScraper:
                 page.wait_for_timeout(2000)
 
                 # STEP 6: Click first "Order Official Copies"
-                page.wait_for_selector("a[href*='OCS2205.do']", timeout=30000)
+                try:
+                    page.wait_for_selector("a[href*='OCS2205.do']", timeout=30000)
+                except Exception:
+                    # No results found for this address / postcode
+                    logger.warning("No title results found for the given address/postcode")
+                    self._take_error_screenshot(page, "landregistry_no_results")
+                    result.error = "no_results"
+                    context.close()
+                    return result
                 page.locator("a[href*='OCS2205.do']").first.click()
                 page.wait_for_load_state("domcontentloaded")
                 page.wait_for_timeout(2000)
@@ -232,7 +297,6 @@ class LandRegistryScraper:
                             register_disk_path = os.path.join(DOWNLOAD_DIR, result.register_local_path.split("/")[-1])
 
                             try:
-                                from .pdf_parser import parse_pdf
                                 result.register_data = parse_pdf(register_disk_path, doc_type="register")
                             except Exception as e:
                                 result.register_data = {"parse_error": str(e)}
@@ -254,7 +318,6 @@ class LandRegistryScraper:
                             title_plan_disk_path = os.path.join(DOWNLOAD_DIR, result.title_plan_local_path.split("/")[-1])
 
                             try:
-                                from .pdf_parser import parse_pdf
                                 result.title_plan_data = parse_pdf(title_plan_disk_path, doc_type="title_plan")
                             except Exception as e:
                                 result.title_plan_data = {"parse_error": str(e)}
@@ -283,3 +346,16 @@ class LandRegistryScraper:
         except Exception as e:
             result.error = str(e)
         return result
+
+    def _take_error_screenshot(self, page, name_prefix: str):
+        """Save a debug screenshot when an error occurs."""
+        try:
+            _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
+            _ss_dir.mkdir(parents=True, exist_ok=True)
+            _ts = _time.strftime("%Y%m%d_%H%M%S")
+            _ss_name = f"{name_prefix}_{_ts}.png"
+            _ss_path = str(_ss_dir / _ss_name)
+            page.screenshot(path=_ss_path, full_page=True)
+            logger.info(f"Error screenshot saved to: {_ss_path}")
+        except Exception as e:
+            logger.warning(f"Could not save error screenshot: {e}")

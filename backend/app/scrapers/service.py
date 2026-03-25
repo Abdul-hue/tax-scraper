@@ -300,7 +300,7 @@ async def run_idu_scraper_start(
         try:
             _cleanup_old_sessions()
             _save_idu_result(sid, {"status": "processing"})
-            scraper = IDUScraper(username=user, password=pwd, headless=False)
+            scraper = IDUScraper(username=user, password=pwd, headless=True)
             
             # Setup OTP sync mechanism
             scraper.otp_event = threading.Event()
@@ -419,7 +419,7 @@ async def run_idu_scraper(
 
     def _run_idu_sync(user, pwd, conf):
         try:
-            scraper = IDUScraper(username=user, password=pwd, headless=False)
+            scraper = IDUScraper(username=user, password=pwd, headless=True)
             result = scraper.search(conf)
             return result.to_dict()
         except Exception as e:
