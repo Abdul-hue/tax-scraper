@@ -71,7 +71,6 @@ class LandRegistryScraper:
             with sync_playwright() as p:
                 launch_args = {
                 "user_data_dir": str(user_data_path),
-                "channel": "chrome",
                 "headless": getattr(self, "headless", False),
                 "args": [
                     "--no-sandbox",
