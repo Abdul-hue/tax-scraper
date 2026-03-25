@@ -122,12 +122,13 @@ class LandRegistryScraper:
                 def _do_login(pg):
                     """Perform PKMS login if the login form is currently visible."""
                     try:
+                        print("[LR-DEBUG] LOGIN: Checking for login form...", flush=True)
                         pg.wait_for_selector("input#username", timeout=5000)
                     except Exception:
-                        logger.info("No login form present — already authenticated")
+                        print("[LR-DEBUG] LOGIN: No login form — already authenticated", flush=True)
                         return  # already logged in
 
-                    logger.info("Login form detected — logging in...")
+                    print("[LR-DEBUG] LOGIN: Login form detected — typing credentials...", flush=True)
                     pg.wait_for_timeout(random.randint(500, 1500))
                     for char in username:
                         pg.type("input#username", char, delay=random.randint(50, 150))
@@ -138,9 +139,11 @@ class LandRegistryScraper:
                     sign_in = pg.locator("input[value='Sign in']")
                     sign_in.hover()
                     pg.wait_for_timeout(random.randint(200, 500))
+                    print("[LR-DEBUG] LOGIN: Clicking Sign In...", flush=True)
                     sign_in.click()
                     pg.wait_for_load_state("domcontentloaded")
                     pg.wait_for_timeout(5000)
+                    print(f"[LR-DEBUG] LOGIN: After sign in click. URL={pg.url}", flush=True)
 
                     # Handle "already signed in somewhere else"
                     if "pkmsdisplace" in pg.content() or "already signed in" in pg.content().lower():
@@ -163,21 +166,24 @@ class LandRegistryScraper:
                         raise Exception("Login failed — check username and password")
 
                 # STEP 2: Login at homepage if session has expired
+                print("[LR-DEBUG] STEP 2: Calling _do_login()...", flush=True)
                 _do_login(page)
                 page.wait_for_timeout(2000)
+                print(f"[LR-DEBUG] STEP 2: Login done. URL={page.url}", flush=True)
 
                 # STEP 4: Navigate to Request Official Copies
+                print("[LR-DEBUG] STEP 4: Navigating to ECOCS...", flush=True)
                 page.goto(
                     f"{BASE}/eservices/ECOCS_OfficialCopies/ocs/init.do?id=oc_link",
                     wait_until="domcontentloaded",
                     timeout=60000
                 )
                 page.wait_for_timeout(2000)
+                print(f"[LR-DEBUG] STEP 4: ECOCS page loaded. URL={page.url}", flush=True)
 
                 # The ECOCS URL may redirect back to PKMS login if the session expired
-                # mid-flight — detect and re-login on demand
                 if "pkmslogin" in page.url or page.locator("input#username").is_visible():
-                    logger.warning("Redirected to login after ECOCS navigation — re-logging in")
+                    print("[LR-DEBUG] STEP 4: Redirected to login — re-logging in", flush=True)
                     _do_login(page)
                     page.goto(
                         f"{BASE}/eservices/ECOCS_OfficialCopies/ocs/init.do?id=oc_link",
@@ -185,11 +191,15 @@ class LandRegistryScraper:
                         timeout=60000
                     )
                     page.wait_for_timeout(2000)
+                    print(f"[LR-DEBUG] STEP 4: Re-login done. URL={page.url}", flush=True)
 
                 # Now the OC form should be visible
+                print("[LR-DEBUG] STEP 4: Waiting for OCForm...", flush=True)
                 try:
                     page.wait_for_selector("form[name='OCForm']", timeout=120000)
+                    print("[LR-DEBUG] STEP 4: OCForm found!", flush=True)
                 except Exception:
+                    print(f"[LR-DEBUG] STEP 4: OCForm NOT FOUND! URL={page.url}", flush=True)
                     self._take_error_screenshot(page, "landregistry_ocform_missing")
                     raise Exception(
                         f"OCForm not found after login. Current URL: {page.url}. "
