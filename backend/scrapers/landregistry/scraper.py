@@ -81,6 +81,9 @@ class LandRegistryScraper:
                 "ignore_default_args": ["--enable-automation", "--no-sandbox"],
                 "accept_downloads": True,
             }
+                import sys
+                if sys.platform == "win32":
+                    launch_args["channel"] = "chrome"
 
                 try:
                     logger.info(f"Launching browser with profile: {user_data_path}")
