@@ -113,20 +113,37 @@ class LandRegistryScraper:
                 print(f"[LR-DEBUG] STEP 1: Navigating to {BASE}/eservices/", flush=True)
                 page.goto(f"{BASE}/eservices/", wait_until="domcontentloaded", timeout=60000)
                 print(f"[LR-DEBUG] STEP 1: Page loaded. URL={page.url}", flush=True)
+                print(f"[LR-DEBUG] STEP 1: Page title: {page.title()}", flush=True)
+
+                # Wait for Cloudflare challenge to resolve (up to 15 seconds)
+                if '__cf_chl' in page.url or 'challenge' in page.title().lower() or 'just a moment' in page.title().lower():
+                    print("[LR-DEBUG] STEP 1: Cloudflare challenge detected! Waiting for it to resolve...", flush=True)
+                    for i in range(15):
+                        page.wait_for_timeout(1000)
+                        current_title = page.title()
+                        print(f"[LR-DEBUG] STEP 1: CF wait {i+1}s - title='{current_title}', url={page.url[:80]}", flush=True)
+                        if 'just a moment' not in current_title.lower() and '__cf_chl' not in page.url:
+                            print("[LR-DEBUG] STEP 1: Cloudflare resolved!", flush=True)
+                            break
+                    else:
+                        print("[LR-DEBUG] STEP 1: Cloudflare did NOT resolve after 15s!", flush=True)
+
                 page.mouse.move(random.randint(100, 800), random.randint(100, 400))
                 page.wait_for_timeout(random.randint(1000, 2000))
                 page.mouse.wheel(0, random.randint(100, 300))
                 page.wait_for_timeout(random.randint(500, 1500))
-                print("[LR-DEBUG] STEP 1: Navigation complete.", flush=True)
+                print(f"[LR-DEBUG] STEP 1: After human sim. URL={page.url}, title={page.title()}", flush=True)
 
                 def _do_login(pg):
                     """Perform PKMS login if the login form is currently visible."""
+                    page_content = pg.content()[:500]
+                    print(f"[LR-DEBUG] LOGIN: Page content preview: {page_content[:200]}", flush=True)
                     try:
                         print("[LR-DEBUG] LOGIN: Checking for login form...", flush=True)
-                        pg.wait_for_selector("input#username", timeout=5000)
+                        pg.wait_for_selector("input#username", timeout=10000)
                     except Exception:
-                        print("[LR-DEBUG] LOGIN: No login form — already authenticated", flush=True)
-                        return  # already logged in
+                        print(f"[LR-DEBUG] LOGIN: No login form found. Title='{pg.title()}', URL={pg.url}", flush=True)
+                        return  # already logged in or Cloudflare blocked
 
                     print("[LR-DEBUG] LOGIN: Login form detected — typing credentials...", flush=True)
                     pg.wait_for_timeout(random.randint(500, 1500))
