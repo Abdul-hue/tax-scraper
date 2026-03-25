@@ -36,8 +36,10 @@ class LandRegistryScraper:
 
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
         import os
+        print(f"[LR-DEBUG] scrape() called. headless={self.headless}", flush=True)
         username = query.username
         password = query.password
+        print(f"[LR-DEBUG] Credentials: user='{username}', pass_len={len(password) if password else 0}", flush=True)
 
         if not username or not password:
             raise Exception("Land Registry Username and Password are required. Please enter them in the form.")
@@ -47,6 +49,7 @@ class LandRegistryScraper:
         )
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
         os.makedirs(PROFILE_DIR, exist_ok=True)
+        print(f"[LR-DEBUG] Dirs created. DOWNLOAD_DIR={DOWNLOAD_DIR}, PROFILE_DIR={PROFILE_DIR}", flush=True)
 
         try:
             # 1. Clean Postcode — guard against None
@@ -66,46 +69,55 @@ class LandRegistryScraper:
 
             user_data_path = Path(PROFILE_DIR).resolve() / username
             self._cleanup_profile(user_data_path)
+            print(f"[LR-DEBUG] Profile path: {user_data_path}", flush=True)
 
             with sync_playwright() as p:
-                launch_args = {
-                "user_data_dir": str(user_data_path),
-                "headless": getattr(self, "headless", False),
-                "args": [
-                    "--no-sandbox",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--start-maximized",
-                ],
-                "ignore_default_args": ["--enable-automation"],
-                "accept_downloads": True,
-            }
                 import sys
+                launch_args = {
+                    "user_data_dir": str(user_data_path),
+                    "headless": self.headless,
+                    "args": [
+                        "--no-sandbox",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--start-maximized",
+                    ],
+                    "ignore_default_args": ["--enable-automation"],
+                    "accept_downloads": True,
+                }
                 if sys.platform == "win32":
                     launch_args["channel"] = "chrome"
 
+                print(f"[LR-DEBUG] Launch args: headless={launch_args['headless']}, platform={sys.platform}", flush=True)
+
                 try:
-                    logger.info(f"Launching browser with profile: {user_data_path}")
+                    print("[LR-DEBUG] Attempting browser launch...", flush=True)
                     context = p.chromium.launch_persistent_context(**launch_args)
+                    print("[LR-DEBUG] Browser launched successfully!", flush=True)
                 except Exception as e:
-                    # If it fails, the lock might be deeper. Try one more time with a full cleanup.
-                    logger.warning(f"Browser launch failed: {e}. Performing deep cleanup and retrying...")
+                    print(f"[LR-DEBUG] Browser launch FAILED: {e}", flush=True)
+                    print("[LR-DEBUG] Retrying after cleanup...", flush=True)
                     _time.sleep(2)
                     self._cleanup_profile(user_data_path)
                     context = p.chromium.launch_persistent_context(**launch_args)
+                    print("[LR-DEBUG] Browser launched on retry!", flush=True)
 
                 if len(context.pages) > 0:
                     page = context.pages[0]
                 else:
                     page = context.new_page()
                 Stealth().apply_stealth_sync(page)
+                print("[LR-DEBUG] Page ready, stealth applied.", flush=True)
 
                 # STEP 1: Navigate to eservices root
+                print(f"[LR-DEBUG] STEP 1: Navigating to {BASE}/eservices/", flush=True)
                 page.goto(f"{BASE}/eservices/", wait_until="domcontentloaded", timeout=60000)
+                print(f"[LR-DEBUG] STEP 1: Page loaded. URL={page.url}", flush=True)
                 page.mouse.move(random.randint(100, 800), random.randint(100, 400))
                 page.wait_for_timeout(random.randint(1000, 2000))
                 page.mouse.wheel(0, random.randint(100, 300))
                 page.wait_for_timeout(random.randint(500, 1500))
+                print("[LR-DEBUG] STEP 1: Navigation complete.", flush=True)
 
                 def _do_login(pg):
                     """Perform PKMS login if the login form is currently visible."""

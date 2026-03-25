@@ -227,19 +227,20 @@ async def run_landregistry_scraper(
 
     try:
         loop = asyncio.get_event_loop()
+        print("[LR-SERVICE] Starting LandRegistryScraper...", flush=True)
         result = await loop.run_in_executor(None, LandRegistryScraper().scrape, query)
+        print("[LR-SERVICE] Scraper completed successfully!", flush=True)
         return result.to_dict()
     except Exception as e:
         import traceback
-        # Assuming logger is defined elsewhere or use print if not
-        try:
-            logger.error(f"Land Registry scraper service error: {e}", exc_info=True)
-        except NameError:
-            print(f"Land Registry scraper service error: {e}")
+        tb = traceback.format_exc()
+        print(f"[LR-SERVICE] ERROR: {e}", flush=True)
+        print(f"[LR-SERVICE] TRACEBACK:\n{tb}", flush=True)
+        logger.error(f"Land Registry scraper service error: {e}", exc_info=True)
             
         return {
             "error": str(e),
-            "traceback": traceback.format_exc(),
+            "traceback": tb,
             "register_data": {},
             "title_plan_data": {}
         }
