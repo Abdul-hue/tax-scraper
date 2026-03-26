@@ -1,7 +1,7 @@
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 from datetime import datetime, timezone
-import os, random, time as _time, logging
+import os, random, time as _time, logging, sys
 from pathlib import Path
 from scrapers.landregistry.models import LandRegistryQuery, LandRegistryResult
 from scrapers.common.browser import get_browser_args
@@ -16,7 +16,6 @@ PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 
 class LandRegistryScraper:
     def __init__(self, config=None, headless: bool = None):
-        import os
         if headless is None:
             self.headless = os.getenv("HEADLESS", "true").lower() == "true"
         else:
@@ -34,8 +33,53 @@ class LandRegistryScraper:
                 except Exception as e:
                     logger.warning(f"Could not delete lock file {lock_file}: {e}")
 
+    def _wait_for_cloudflare(self, page, max_wait: int = 30):
+        """Wait for Cloudflare challenge to resolve."""
+        print("[LR-DEBUG] Checking for Cloudflare challenge...", flush=True)
+
+        # First handle Turnstile iframe if present
+        try:
+            turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
+            if turnstile.is_visible(timeout=3000):
+                print("[LR-DEBUG] Turnstile iframe detected — clicking to trigger verification...", flush=True)
+                page.mouse.move(300, 300)
+                page.wait_for_timeout(1000)
+                page.mouse.click(300, 300)
+                page.wait_for_timeout(2000)
+        except Exception:
+            pass
+
+        # Wait for challenge to clear
+        for i in range(max_wait):
+            current_title = page.title().lower()
+            current_url = page.url
+
+            if 'just a moment' not in current_title and '__cf_chl' not in current_url and 'challenge' not in current_title:
+                print(f"[LR-DEBUG] Cloudflare cleared after {i}s. Title='{page.title()}'", flush=True)
+                return True
+
+            print(f"[LR-DEBUG] CF wait {i+1}s - title='{page.title()}', url={current_url[:80]}", flush=True)
+
+            # Try clicking Turnstile checkbox every 5 seconds
+            if i % 5 == 0:
+                try:
+                    turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
+                    if turnstile.is_visible(timeout=1000):
+                        box = turnstile.bounding_box()
+                        if box:
+                            cx = box['x'] + box['width'] / 2
+                            cy = box['y'] + box['height'] / 2
+                            page.mouse.click(cx, cy)
+                            print(f"[LR-DEBUG] Clicked Turnstile iframe center at ({cx}, {cy})", flush=True)
+                except Exception:
+                    pass
+
+            page.wait_for_timeout(1000)
+
+        print(f"[LR-DEBUG] Cloudflare did NOT resolve after {max_wait}s!", flush=True)
+        return False
+
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
-        import os
         print(f"[LR-DEBUG] scrape() called. headless={self.headless}", flush=True)
         username = query.username
         password = query.password
@@ -43,22 +87,18 @@ class LandRegistryScraper:
 
         if not username or not password:
             raise Exception("Land Registry Username and Password are required. Please enter them in the form.")
-        
+
         result = LandRegistryResult(
             scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         )
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
         os.makedirs(PROFILE_DIR, exist_ok=True)
-        print(f"[LR-DEBUG] Dirs created. DOWNLOAD_DIR={DOWNLOAD_DIR}, PROFILE_DIR={PROFILE_DIR}", flush=True)
 
         try:
-            # 1. Clean Postcode — guard against None
             postcode = (query.postcode or "").strip().upper()
-            
-            # 2. Combine Flat and House if both present — guard against None
             house_field = (query.house or "").strip()
             flat_field = (query.flat or "").strip()
-            
+
             address_line_1 = ""
             if flat_field and house_field:
                 address_line_1 = f"{flat_field}, {house_field}"
@@ -72,78 +112,77 @@ class LandRegistryScraper:
             print(f"[LR-DEBUG] Profile path: {user_data_path}", flush=True)
 
             with sync_playwright() as p:
-                import sys
+                # Base launch args — works on both Windows and Linux/Docker
                 launch_args = {
                     "user_data_dir": str(user_data_path),
                     "headless": self.headless,
                     "args": [
                         "--no-sandbox",
-                        "--disable-blink-features=AutomationControlled",
                         "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-features=IsolateOrigins,site-per-process",
+                        "--disable-infobars",
                         "--start-maximized",
+                        "--flag-switches-begin",
+                        "--disable-site-isolation-trials",
+                        "--flag-switches-end",
                     ],
                     "ignore_default_args": ["--enable-automation"],
                     "accept_downloads": True,
+                    # Match user agent to Windows Chrome to avoid TLS mismatch
+                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 }
+
+                # Use real Chrome only on Windows (Docker/Linux only has Chromium)
                 if sys.platform == "win32":
                     launch_args["channel"] = "chrome"
 
-                print(f"[LR-DEBUG] Launch args: headless={launch_args['headless']}, platform={sys.platform}", flush=True)
+                print(f"[LR-DEBUG] Launching browser. headless={self.headless}, platform={sys.platform}", flush=True)
 
                 try:
-                    print("[LR-DEBUG] Attempting browser launch...", flush=True)
                     context = p.chromium.launch_persistent_context(**launch_args)
                     print("[LR-DEBUG] Browser launched successfully!", flush=True)
                 except Exception as e:
-                    print(f"[LR-DEBUG] Browser launch FAILED: {e}", flush=True)
-                    print("[LR-DEBUG] Retrying after cleanup...", flush=True)
+                    print(f"[LR-DEBUG] Browser launch FAILED: {e}. Retrying...", flush=True)
                     _time.sleep(2)
                     self._cleanup_profile(user_data_path)
                     context = p.chromium.launch_persistent_context(**launch_args)
                     print("[LR-DEBUG] Browser launched on retry!", flush=True)
 
-                if len(context.pages) > 0:
-                    page = context.pages[0]
-                else:
-                    page = context.new_page()
+                page = context.pages[0] if context.pages else context.new_page()
+
+                # Apply stealth BEFORE any navigation
                 Stealth().apply_stealth_sync(page)
-                print("[LR-DEBUG] Page ready, stealth applied.", flush=True)
+                print("[LR-DEBUG] Stealth applied.", flush=True)
 
                 # STEP 1: Navigate to eservices root
                 print(f"[LR-DEBUG] STEP 1: Navigating to {BASE}/eservices/", flush=True)
                 page.goto(f"{BASE}/eservices/", wait_until="domcontentloaded", timeout=60000)
-                print(f"[LR-DEBUG] STEP 1: Page loaded. URL={page.url}", flush=True)
-                print(f"[LR-DEBUG] STEP 1: Page title: {page.title()}", flush=True)
+                page.wait_for_timeout(3000)
+                print(f"[LR-DEBUG] STEP 1: Loaded. URL={page.url}, title={page.title()}", flush=True)
 
-                # Wait for Cloudflare challenge to resolve (up to 15 seconds)
-                if '__cf_chl' in page.url or 'challenge' in page.title().lower() or 'just a moment' in page.title().lower():
-                    print("[LR-DEBUG] STEP 1: Cloudflare challenge detected! Waiting for it to resolve...", flush=True)
-                    for i in range(15):
-                        page.wait_for_timeout(1000)
-                        current_title = page.title()
-                        print(f"[LR-DEBUG] STEP 1: CF wait {i+1}s - title='{current_title}', url={page.url[:80]}", flush=True)
-                        if 'just a moment' not in current_title.lower() and '__cf_chl' not in page.url:
-                            print("[LR-DEBUG] STEP 1: Cloudflare resolved!", flush=True)
-                            break
-                    else:
-                        print("[LR-DEBUG] STEP 1: Cloudflare did NOT resolve after 15s!", flush=True)
+                # Handle Cloudflare
+                if 'just a moment' in page.title().lower() or '__cf_chl' in page.url or 'challenge' in page.title().lower():
+                    resolved = self._wait_for_cloudflare(page, max_wait=30)
+                    if not resolved:
+                        self._take_error_screenshot(page, "landregistry_cloudflare_blocked")
+                        raise Exception("Cloudflare challenge did not resolve. Try using a UK residential proxy.")
 
+                # Human-like behaviour
                 page.mouse.move(random.randint(100, 800), random.randint(100, 400))
                 page.wait_for_timeout(random.randint(1000, 2000))
                 page.mouse.wheel(0, random.randint(100, 300))
                 page.wait_for_timeout(random.randint(500, 1500))
-                print(f"[LR-DEBUG] STEP 1: After human sim. URL={page.url}, title={page.title()}", flush=True)
+                print(f"[LR-DEBUG] STEP 1: After human sim. URL={page.url}", flush=True)
 
                 def _do_login(pg):
                     """Perform PKMS login if the login form is currently visible."""
-                    page_content = pg.content()[:500]
-                    print(f"[LR-DEBUG] LOGIN: Page content preview: {page_content[:200]}", flush=True)
+                    print(f"[LR-DEBUG] LOGIN: Checking for login form. URL={pg.url}", flush=True)
                     try:
-                        print("[LR-DEBUG] LOGIN: Checking for login form...", flush=True)
                         pg.wait_for_selector("input#username", timeout=10000)
                     except Exception:
-                        print(f"[LR-DEBUG] LOGIN: No login form found. Title='{pg.title()}', URL={pg.url}", flush=True)
-                        return  # already logged in or Cloudflare blocked
+                        print(f"[LR-DEBUG] LOGIN: No login form — already authenticated. URL={pg.url}", flush=True)
+                        return
 
                     print("[LR-DEBUG] LOGIN: Login form detected — typing credentials...", flush=True)
                     pg.wait_for_timeout(random.randint(500, 1500))
@@ -160,7 +199,7 @@ class LandRegistryScraper:
                     sign_in.click()
                     pg.wait_for_load_state("domcontentloaded")
                     pg.wait_for_timeout(5000)
-                    print(f"[LR-DEBUG] LOGIN: After sign in click. URL={pg.url}", flush=True)
+                    print(f"[LR-DEBUG] LOGIN: After sign in. URL={pg.url}", flush=True)
 
                     # Handle "already signed in somewhere else"
                     if "pkmsdisplace" in pg.content() or "already signed in" in pg.content().lower():
@@ -171,18 +210,18 @@ class LandRegistryScraper:
                         except Exception as e:
                             logger.warning(f"pkmsdisplace redirect failed: {e}")
 
-                    # Verify we left the login page
+                    # Verify login succeeded
                     try:
                         pg.wait_for_function(
                             "() => !window.location.href.includes('pkmslogin')",
                             timeout=30000
                         )
-                        logger.info("Login successful")
+                        print("[LR-DEBUG] LOGIN: Login successful!", flush=True)
                     except Exception:
-                        self._take_error_screenshot(pg, "landregistry_login_captcha_or_error")
+                        self._take_error_screenshot(pg, "landregistry_login_failed")
                         raise Exception("Login failed — check username and password")
 
-                # STEP 2: Login at homepage if session has expired
+                # STEP 2: Login
                 print("[LR-DEBUG] STEP 2: Calling _do_login()...", flush=True)
                 _do_login(page)
                 page.wait_for_timeout(2000)
@@ -196,11 +235,11 @@ class LandRegistryScraper:
                     timeout=60000
                 )
                 page.wait_for_timeout(2000)
-                print(f"[LR-DEBUG] STEP 4: ECOCS page loaded. URL={page.url}", flush=True)
+                print(f"[LR-DEBUG] STEP 4: ECOCS loaded. URL={page.url}", flush=True)
 
-                # The ECOCS URL may redirect back to PKMS login if the session expired
+                # Re-login if session expired mid-flight
                 if "pkmslogin" in page.url or page.locator("input#username").is_visible():
-                    print("[LR-DEBUG] STEP 4: Redirected to login — re-logging in", flush=True)
+                    print("[LR-DEBUG] STEP 4: Session expired — re-logging in", flush=True)
                     _do_login(page)
                     page.goto(
                         f"{BASE}/eservices/ECOCS_OfficialCopies/ocs/init.do?id=oc_link",
@@ -208,9 +247,8 @@ class LandRegistryScraper:
                         timeout=60000
                     )
                     page.wait_for_timeout(2000)
-                    print(f"[LR-DEBUG] STEP 4: Re-login done. URL={page.url}", flush=True)
 
-                # Now the OC form should be visible
+                # Wait for OC form
                 print("[LR-DEBUG] STEP 4: Waiting for OCForm...", flush=True)
                 try:
                     page.wait_for_selector("form[name='OCForm']", timeout=120000)
@@ -219,11 +257,10 @@ class LandRegistryScraper:
                     print(f"[LR-DEBUG] STEP 4: OCForm NOT FOUND! URL={page.url}", flush=True)
                     self._take_error_screenshot(page, "landregistry_ocform_missing")
                     raise Exception(
-                        f"OCForm not found after login. Current URL: {page.url}. "
-                        "The ECOCS service may be down or the credentials invalid."
+                        f"OCForm not found. URL: {page.url}. "
+                        "ECOCS service may be down or credentials invalid."
                     )
                 page.wait_for_timeout(1000)
-
 
                 # STEP 5: Fill property search form
                 if query.title_number:
@@ -245,7 +282,6 @@ class LandRegistryScraper:
                 try:
                     page.wait_for_selector("a[href*='OCS2205.do']", timeout=30000)
                 except Exception:
-                    # No results found for this address / postcode
                     logger.warning("No title results found for the given address/postcode")
                     self._take_error_screenshot(page, "landregistry_no_results")
                     result.error = "no_results"
@@ -273,13 +309,13 @@ class LandRegistryScraper:
                 except:
                     pass
 
-                # STEP 8: Select OC1 → Next
+                # STEP 8: Select OC1
                 page.check("input[value='OC1']")
                 page.click("input[name='btnNext']")
                 page.wait_for_load_state("domcontentloaded")
                 page.wait_for_timeout(2000)
 
-                # STEP 9: Check Register and/or Title Plan → Next
+                # STEP 9: Check Register and/or Title Plan
                 if query.order_register:
                     try:
                         page.check("input[name='registerChoiceTemp']")
@@ -300,7 +336,7 @@ class LandRegistryScraper:
                 page.wait_for_load_state("domcontentloaded")
                 page.wait_for_timeout(3000)
 
-                # STEP 11: Get both PDF hrefs
+                # STEP 11: Get PDF hrefs
                 timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 title_safe = (result.title_number or "unknown").replace("/", "_")
 
@@ -318,11 +354,7 @@ class LandRegistryScraper:
                 except:
                     pass
 
-                # STEP 12: Click each PDF link and capture the download using expect_download()
-                # The links trigger a direct file download (not a page navigation), so we must
-                # use expect_download() — page.goto() throws "Download is starting" on these URLs.
-
-                # Download Register PDF by clicking the link on the page
+                # STEP 12: Download Register PDF
                 if result.register_url:
                     try:
                         fname = f"{title_safe}_register_{timestamp}.pdf"
@@ -331,19 +363,14 @@ class LandRegistryScraper:
                             page.locator("a[href*='ImageServlet'][href*='OC1REG']").first.click()
                         dl.value.save_as(file_save_path)
                         result.register_local_path = f"/api/files/landregistry/{fname}"
-                        
-                        # Immediately parse the register PDF
-                        if result.register_local_path:
-                            register_disk_path = os.path.join(DOWNLOAD_DIR, result.register_local_path.split("/")[-1])
-
-                            try:
-                                result.register_data = parse_pdf(register_disk_path, doc_type="register")
-                            except Exception as e:
-                                result.register_data = {"parse_error": str(e)}
+                        try:
+                            result.register_data = parse_pdf(file_save_path, doc_type="register")
+                        except Exception as e:
+                            result.register_data = {"parse_error": str(e)}
                     except Exception as e:
                         result.error = f"Register PDF download error: {e}"
 
-                # Download Title Plan PDF by clicking the link on the page
+                # Download Title Plan PDF
                 if result.title_plan_url:
                     try:
                         fname = f"{title_safe}_title_plan_{timestamp}.pdf"
@@ -352,22 +379,16 @@ class LandRegistryScraper:
                             page.locator("a[href*='ImageServlet'][href*='OC1TP']").first.click()
                         dl.value.save_as(file_save_path)
                         result.title_plan_local_path = f"/api/files/landregistry/{fname}"
-                        
-                        # Immediately parse the title plan PDF
-                        if result.title_plan_local_path:
-                            title_plan_disk_path = os.path.join(DOWNLOAD_DIR, result.title_plan_local_path.split("/")[-1])
-
-                            try:
-                                result.title_plan_data = parse_pdf(title_plan_disk_path, doc_type="title_plan")
-                            except Exception as e:
-                                result.title_plan_data = {"parse_error": str(e)}
+                        try:
+                            result.title_plan_data = parse_pdf(file_save_path, doc_type="title_plan")
+                        except Exception as e:
+                            result.title_plan_data = {"parse_error": str(e)}
                     except Exception as e:
                         existing = result.error or ""
                         result.error = (existing + " | " if existing else "") + f"Title plan PDF download error: {e}"
 
-                # Screenshot capture
-                _backend_dir = Path(__file__).parent.parent.parent
-                _ss_dir = _backend_dir / "static" / "screenshots"
+                # Screenshot
+                _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
                 _ss_dir.mkdir(parents=True, exist_ok=True)
                 _ts = _time.strftime("%Y%m%d_%H%M%S")
                 _ss_name = f"landregistry_{_ts}.png"
@@ -375,9 +396,9 @@ class LandRegistryScraper:
                 try:
                     page.screenshot(path=_ss_path, full_page=True)
                     result.screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                    logger.info(f"Screenshot saved to: {_ss_path}")
+                    logger.info(f"Screenshot saved: {_ss_path}")
                 except Exception as e:
-                    logger.warning(f"Failed to capture screenshot: {e}")
+                    logger.warning(f"Screenshot failed: {e}")
                     result.screenshot_url = None
 
                 result.customer_reference = query.customer_reference
@@ -396,6 +417,6 @@ class LandRegistryScraper:
             _ss_name = f"{name_prefix}_{_ts}.png"
             _ss_path = str(_ss_dir / _ss_name)
             page.screenshot(path=_ss_path, full_page=True)
-            logger.info(f"Error screenshot saved to: {_ss_path}")
+            logger.info(f"Error screenshot saved: {_ss_path}")
         except Exception as e:
             logger.warning(f"Could not save error screenshot: {e}")
