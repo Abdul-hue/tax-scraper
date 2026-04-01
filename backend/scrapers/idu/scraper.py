@@ -114,48 +114,23 @@ class IDUScraper:
             try:
                 self.page.wait_for_selector('[data-testid="otp-code"]', timeout=10000)
 
-                if hasattr(self, 'otp_event') and hasattr(self, 'otp_value'):
-                    # --- Path A: API-driven external OTP injection ---
-                    if self.otp_used:
-                        self.otp_event.clear()
-                        self.otp_value["code"] = ""
-                        self.otp_used = False
-
-                    if hasattr(self, 'session_id'):
-                        from app.scrapers.service import _save_idu_result
-                        _save_idu_result(self.session_id, {"status": "awaiting_otp"})
-
-                    signaled = self.otp_event.wait(timeout=300)
-                    if signaled:
-                        code = self.otp_value.get("code", "")
-                        if code:
-                            logger.info("Injecting API-supplied OTP code")
-                            self.page.fill('[data-testid="otp-code"]', code)
-                            self.page.click('[data-testid="otp-submit"]')
-                            self.otp_used = True
-                            self.page.wait_for_load_state("networkidle", timeout=30000)
-                    else:
-                        logger.warning("Timed out waiting for external OTP signal")
-
+                from .otp_email import fetch_otp_from_email
+                logger.info("OTP field detected — auto-fetching from email...")
+                code = fetch_otp_from_email(
+                    poll_interval=5.0,
+                    timeout=120.0,
+                    since_timestamp=_otp_trigger_time,
+                )
+                if code:
+                    logger.info("Auto-injecting email OTP: %s", code)
+                    self.page.fill('[data-testid="otp-code"]', code)
+                    self.page.click('[data-testid="otp-submit"]')
+                    self.page.wait_for_load_state("networkidle", timeout=30000)
                 else:
-                    # --- Path B: Fully automatic — read OTP from email ---
-                    from .otp_email import fetch_otp_from_email
-                    logger.info("OTP field detected — auto-fetching from email...")
-                    code = fetch_otp_from_email(
-                        poll_interval=5.0,
-                        timeout=120.0,
-                        since_timestamp=_otp_trigger_time,
+                    raise RuntimeError(
+                        "OTP not received from email within timeout. "
+                        "Check OTP_EMAIL_* settings in .env and IMAP access on the account."
                     )
-                    if code:
-                        logger.info("Auto-injecting email OTP: %s", code)
-                        self.page.fill('[data-testid="otp-code"]', code)
-                        self.page.click('[data-testid="otp-submit"]')
-                        self.page.wait_for_load_state("networkidle", timeout=30000)
-                    else:
-                        raise RuntimeError(
-                            "OTP not received from email within timeout. "
-                            "Check OTP_EMAIL_* settings in .env"
-                        )
             except Exception:
                 raise
 

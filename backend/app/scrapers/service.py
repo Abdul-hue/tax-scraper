@@ -397,14 +397,7 @@ async def run_idu_scraper_submit_otp(session_id: str, otp: str):
     """
     Step 2: Submit OTP to unblock the background scraper.
     """
-    if session_id not in active_idu_sessions:
-        return {"error": "Session not found or already closed"}
-    
-    scraper = active_idu_sessions[session_id]
-    scraper.otp_value["code"] = otp
-    scraper.otp_event.set()
-    
-    return {"status": "processing"}
+    return {"status": "error", "message": "Manual OTP submission is deprecated. The system is fully automated via email."}
 
 
 async def run_idu_scraper_get_result(session_id: str):
