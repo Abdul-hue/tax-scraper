@@ -45,45 +45,34 @@ threading.Thread(target=_start_idu_keeper, daemon=True, name="IDUKeeperStarter")
 active_idu_sessions = {}  # session_id -> IDUScraper instance
 
 
-# --- Singleton IDU scraper (avoids re-login on every request) ---
-_idu_singleton: "IDUScraper | None" = None  # type: ignore[name-defined]
-_idu_singleton_lock = threading.Lock()
-_idu_singleton_creds: tuple = (None, None)  # (username, password)
+# ── IDU Threading Lock ───────────────────────────────────────────────────────
+# Used to ensure only one thread at a time performs core IDU browser operations.
+# Playwright's sync_api is strictly bound to the thread that created it.
+# We no longer use a singleton IDUScraper object; instead, we create a fresh 
+# instance per request, which is 100% thread-safe.
+_idu_operation_lock = threading.Lock()
 
-
-def _get_idu_singleton(username: str, password: str):
-    """Return the shared IDUScraper instance, creating it if needed.
-
-    Credentials fall back to IDU_USERNAME / IDU_PASSWORD env vars if the
-    caller does not supply them, so the API payload doesn't need to include
-    credentials on every single request.
-
-    If credentials change, the old instance is closed and a fresh one is
-    created (which will attempt to restore from the saved session cookie).
+def _run_idu_task(user: str, pwd: str, task_fn):
     """
+    Safely execute an IDU task in a dedicated Playwright instance.
+    The instance loads the shared session file maintained by the background keeper.
+    """
+    from scrapers.idu.scraper import IDUScraper
     import os
     from dotenv import load_dotenv
     load_dotenv()
-    username = username or os.getenv("IDU_USERNAME", "")
-    password = password or os.getenv("IDU_PASSWORD", "")
+    
+    username = user or os.getenv("IDU_USERNAME", "")
+    password = pwd or os.getenv("IDU_PASSWORD", "")
 
-    global _idu_singleton, _idu_singleton_creds
-    with _idu_singleton_lock:
-        if _idu_singleton is not None and _idu_singleton_creds != (username, password):
-            # Credentials changed — close old instance
-            try:
-                _idu_singleton.close()
-            except Exception:
-                pass
-            _idu_singleton = None
-
-        if _idu_singleton is None:
-            from scrapers.idu.scraper import IDUScraper
-            logger.info("Creating new IDUScraper singleton instance")
-            _idu_singleton = IDUScraper(username=username, password=password, headless=True)
-            _idu_singleton_creds = (username, password)
-
-        return _idu_singleton
+    # We use a lock mainly to prevent two threads from trying to 
+    # update the session file simultaneously if it ever expires.
+    with _idu_operation_lock:
+        scraper = IDUScraper(username=username, password=password, headless=True)
+        try:
+            return task_fn(scraper)
+        finally:
+            scraper.close()
 
 
 # File-based result storage
@@ -368,17 +357,16 @@ async def run_idu_scraper_start(
             _cleanup_old_sessions()
             _save_idu_result(sid, {"status": "processing"})
 
-            # Use the singleton — no new browser/login if already authenticated
-            scraper = _get_idu_singleton(user, pwd)
+            def _logic(scraper):
+                # Attach OTP sync for Step 1-2 flow
+                scraper.otp_event = threading.Event()
+                scraper.otp_value = {"code": ""}
+                scraper.session_id = sid
+                active_idu_sessions[sid] = scraper
+                # The browser will load the background-keeper's session file automatically
+                return scraper.search(conf, screenshot=True)
 
-            # Attach OTP sync mechanism to the singleton for this request
-            scraper.otp_event = threading.Event()
-            scraper.otp_value = {"code": ""}
-            scraper.session_id = sid  # for status communication
-            active_idu_sessions[sid] = scraper
-
-            # Start search (calls _ensure_logged_in which skips if session valid)
-            result = scraper.search(conf, screenshot=True)
+            result = _run_idu_task(user, pwd, _logic)
 
             _save_idu_result(sid, {
                 "status": "complete",
@@ -390,7 +378,6 @@ async def run_idu_scraper_start(
                 "message": str(e)
             })
         finally:
-            # Only remove from active_idu_sessions; do NOT close the singleton browser
             if sid in active_idu_sessions:
                 del active_idu_sessions[sid]
 
@@ -484,10 +471,7 @@ async def run_idu_scraper(
 
     def _run_idu_sync(user, pwd, conf):
         try:
-            # Use the singleton — no re-login if the session is still alive
-            scraper = _get_idu_singleton(user, pwd)
-            result = scraper.search(conf)
-            return result.to_dict()
+            return _run_idu_task(user, pwd, lambda s: s.search(conf).to_dict())
         except Exception as e:
             return {"error": str(e)}
 

@@ -45,117 +45,119 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
     from scrapers.idu import session as session_mod
     from scrapers.idu.otp_email import fetch_otp_from_email
     from scrapers.common.browser import get_browser_args
+    from app.scrapers.service import _idu_operation_lock
 
     logger.info("[SessionKeeper] Starting refresh check...")
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=get_browser_args(),
-        )
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                " AppleWebKit/537.36 (KHTML, like Gecko)"
-                " Chrome/114.0.0.0 Safari/537.36"
-            ),
-        )
-        page = context.new_page()
+    with _idu_operation_lock:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=get_browser_args(),
+            )
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                    " AppleWebKit/537.36 (KHTML, like Gecko)"
+                    " Chrome/114.0.0.0 Safari/537.36"
+                ),
+            )
+            page = context.new_page()
 
-        try:
-            # Step 1 — Load saved session
-            loaded = session_mod.load_session(context, session_file)
-            if loaded and session_mod.is_session_valid(page):
-                logger.info("[SessionKeeper] Session still valid — no refresh needed.")
-                return True
-
-            logger.info("[SessionKeeper] Session expired or missing — re-logging in...")
-            session_mod.delete_session(session_file)
-
-            # Step 2 — Navigate to login page
-            page.goto("https://sso.tracesmart.co.uk/login/idu", timeout=30000)
-            page.wait_for_selector("#username", timeout=20000)
-            page.fill("#username", username)
-            page.fill("#password", password)
-            page.click('input[data-testid="sign-in"]')
-
-            # Step 3 — Send OTP button
             try:
-                otp_send_btn = page.locator('[data-testid="otp-send"]')
-                if otp_send_btn.is_visible(timeout=4000):
+                # Step 1 — Load saved session
+                loaded = session_mod.load_session(context, session_file)
+                if loaded and session_mod.is_session_valid(page):
+                    logger.info("[SessionKeeper] Session still valid — no refresh needed.")
+                    return True
+
+                logger.info("[SessionKeeper] Session expired or missing — re-logging in...")
+                session_mod.delete_session(session_file)
+
+                # Step 2 — Navigate to login page
+                page.goto("https://sso.tracesmart.co.uk/login/idu", timeout=30000)
+                page.wait_for_selector("#username", timeout=20000)
+                page.fill("#username", username)
+                page.fill("#password", password)
+                page.click('input[data-testid="sign-in"]')
+
+                # Step 3 — Send OTP button
+                try:
+                    otp_send_btn = page.locator('[data-testid="otp-send"]')
+                    if otp_send_btn.is_visible(timeout=4000):
+                        otp_trigger_time = time.time()
+                        logger.info("[SessionKeeper] Clicking 'Send OTP' button...")
+                        otp_send_btn.click()
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                    else:
+                        otp_trigger_time = time.time()
+                except Exception:
                     otp_trigger_time = time.time()
-                    logger.info("[SessionKeeper] Clicking 'Send OTP' button...")
-                    otp_send_btn.click()
+
+                # Step 4 — Auto-read OTP from email
+                otp_needed = False
+                try:
+                    page.wait_for_selector('[data-testid="otp-code"]', timeout=10000)
+                    otp_needed = True
+                except Exception:
+                    pass
+
+                if otp_needed:
+                    logger.info("[SessionKeeper] OTP field detected — fetching from email...")
+                    otp = fetch_otp_from_email(
+                        poll_interval=5.0,
+                        timeout=120.0,
+                        since_timestamp=otp_trigger_time,
+                    )
+                    if not otp:
+                        logger.error("[SessionKeeper] OTP not received from email — refresh failed.")
+                        return False
+
+                    logger.info("[SessionKeeper] Injecting OTP: %s", otp)
+                    page.fill('[data-testid="otp-code"]', otp)
+                    page.click('[data-testid="otp-submit"]')
+                    page.wait_for_load_state("networkidle", timeout=30000)
+
+                # Step 5 — Handle concurrent-session conflict page
+                try:
+                    page.wait_for_selector('[data-testid="accept"]', timeout=8000)
+                    logger.info("[SessionKeeper] Conflict page — accepting...")
+                    page.click('[data-testid="accept"]')
                     page.wait_for_load_state("networkidle", timeout=15000)
-                else:
-                    otp_trigger_time = time.time()
-            except Exception:
-                otp_trigger_time = time.time()
+                except Exception:
+                    pass
 
-            # Step 4 — Auto-read OTP from email
-            otp_needed = False
-            try:
-                page.wait_for_selector('[data-testid="otp-code"]', timeout=10000)
-                otp_needed = True
-            except Exception:
-                pass
-
-            if otp_needed:
-                logger.info("[SessionKeeper] OTP field detected — fetching from email...")
-                otp = fetch_otp_from_email(
-                    poll_interval=5.0,
-                    timeout=120.0,
-                    since_timestamp=otp_trigger_time,
-                )
-                if not otp:
-                    logger.error("[SessionKeeper] OTP not received from email — refresh failed.")
+                # Step 6 — Verify dashboard
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                    indicator = page.locator("#hd-logout-button, .newSearch").or_(
+                        page.get_by_text("You are logged in")
+                    ).first
+                    indicator.wait_for(state="visible", timeout=15000)
+                    logger.info("[SessionKeeper] Dashboard confirmed at %s", page.url)
+                except Exception as e:
+                    logger.error(
+                        "[SessionKeeper] Dashboard not found after login. URL: %s — %s",
+                        page.url, e,
+                    )
                     return False
 
-                logger.info("[SessionKeeper] Injecting OTP: %s", otp)
-                page.fill('[data-testid="otp-code"]', otp)
-                page.click('[data-testid="otp-submit"]')
-                page.wait_for_load_state("networkidle", timeout=30000)
+                # Step 7 — Save fresh session
+                session_mod.save_session(context, session_file)
+                logger.info("[SessionKeeper] Session refreshed and saved successfully.")
+                return True
 
-            # Step 5 — Handle concurrent-session conflict page
-            try:
-                page.wait_for_selector('[data-testid="accept"]', timeout=8000)
-                logger.info("[SessionKeeper] Conflict page — accepting...")
-                page.click('[data-testid="accept"]')
-                page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:
-                pass
-
-            # Step 6 — Verify dashboard
-            try:
-                page.wait_for_load_state("networkidle", timeout=10000)
-                indicator = page.locator("#hd-logout-button, .newSearch").or_(
-                    page.get_by_text("You are logged in")
-                ).first
-                indicator.wait_for(state="visible", timeout=15000)
-                logger.info("[SessionKeeper] Dashboard confirmed at %s", page.url)
-            except Exception as e:
-                logger.error(
-                    "[SessionKeeper] Dashboard not found after login. URL: %s — %s",
-                    page.url, e,
-                )
+            except Exception as exc:
+                logger.exception("[SessionKeeper] Unexpected error during refresh: %s", exc)
                 return False
-
-            # Step 7 — Save fresh session
-            session_mod.save_session(context, session_file)
-            logger.info("[SessionKeeper] Session refreshed and saved successfully.")
-            return True
-
-        except Exception as exc:
-            logger.exception("[SessionKeeper] Unexpected error during refresh: %s", exc)
-            return False
-        finally:
-            try:
-                page.close()
-                context.close()
-                browser.close()
-            except Exception:
-                pass
+            finally:
+                try:
+                    page.close()
+                    context.close()
+                    browser.close()
+                except Exception:
+                    pass
 
 
 def _keeper_loop(username: str, password: str, session_file: str) -> None:
