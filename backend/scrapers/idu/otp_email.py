@@ -155,7 +155,9 @@ def fetch_otp_from_email(
                 imap = imaplib.IMAP4(host, port)
                 imap.starttls()
 
-            imap.login(user, password)
+            # Google App passwords copy-pasted often include spaces, which break IMAP auth
+            clean_password = password.replace(" ", "")
+            imap.login(user, clean_password)
             imap.select("INBOX")
 
             # Search for recent messages from Tracesmart
