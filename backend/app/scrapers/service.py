@@ -250,9 +250,9 @@ async def run_lps_scraper(
 
 
 async def run_landregistry_scraper(
-    username: str,
-    password: str,
     customer_reference: str,
+    username: str = None,
+    password: str = None,
     title_number: str = "",
     flat: str = "",
     house: str = "",
@@ -305,10 +305,10 @@ async def run_landregistry_scraper(
 
 
 async def run_idu_scraper_start(
-    username: str,
-    password: str,
     forename: str,
     surname: str,
+    username: str = None,
+    password: str = None,
     dd: str = "",
     mm: str = "",
     yyyy: str = "",
@@ -415,10 +415,10 @@ async def run_idu_scraper_get_result(session_id: str):
 
 
 async def run_idu_scraper(
-    username: str,
-    password: str,
     forename: str,
     surname: str,
+    username: str = None,
+    password: str = None,
     dd: str = "",
     mm: str = "",
     yyyy: str = "",

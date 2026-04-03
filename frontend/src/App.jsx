@@ -28,14 +28,13 @@ function App() {
     const updateLpsData = (key, value) => setLpsData(prev => ({ ...prev, [key]: value }))
 
     const [lrData, setLrData] = useState({
-        username: '', password: '', customer_reference: '', title_number: '',
+        customer_reference: '', title_number: '',
         flat: '', house: '', street: '', town: '', postcode: '',
         order_register: true, order_title_plan: true
     })
     const updateLrData = (key, value) => setLrData(prev => ({ ...prev, [key]: value }))
 
     const [iduData, setIduData] = useState({
-        username: 'Wasay', password: '4FuHqJMe#?T9cPY', 
         forename: 'Michael', middlename: 'Stephen', surname: 'Smith',
         dd: '15', mm: '06', yyyy: '1992', gender: 'Male', reference: 'TEST_123',
         house: '', street: 'Denshaw Drive', town: 'Morley', postcode: 'LS27 8RR',
@@ -429,14 +428,6 @@ function App() {
 
                     {activeTab === 'landregistry' && (
                         <div className="form-grid">
-                            <div className="form-group">
-                                <label>Username</label>
-                                <input type="text" className="input-field" value={lrData.username} onChange={e => updateLrData('username', e.target.value)} />
-                            </div>
-                            <div className="form-group">
-                                <label>Password</label>
-                                <input type="password" className="input-field" value={lrData.password} onChange={e => updateLrData('password', e.target.value)} />
-                            </div>
                             <div className="form-group" style={{ gridColumn: 'span 2' }}>
                                 <label>Customer Reference</label>
                                 <input type="text" className="input-field" value={lrData.customer_reference} onChange={e => updateLrData('customer_reference', e.target.value)} />
@@ -466,14 +457,6 @@ function App() {
 
                     {activeTab === 'idu' && (
                         <div className="form-grid">
-                            <div className="form-group">
-                                <label>Tracesmart Username</label>
-                                <input type="text" className="input-field" value={iduData.username} onChange={e => updateIduData('username', e.target.value)} />
-                            </div>
-                            <div className="form-group">
-                                <label>Tracesmart Password</label>
-                                <input type="password" className="input-field" value={iduData.password} onChange={e => updateIduData('password', e.target.value)} />
-                            </div>
                             <div className="form-group">
                                 <label>Forename *</label>
                                 <input type="text" className="input-field" required value={iduData.forename} onChange={e => updateIduData('forename', e.target.value)} />

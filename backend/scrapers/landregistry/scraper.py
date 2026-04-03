@@ -81,12 +81,12 @@ class LandRegistryScraper:
 
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
         print(f"[LR-DEBUG] scrape() called. headless={self.headless}", flush=True)
-        username = query.username
-        password = query.password
+        username = query.username or os.getenv("LAND_REGISTRY_USERNAME", "")
+        password = query.password or os.getenv("LAND_REGISTRY_PASSWORD", "")
         print(f"[LR-DEBUG] Credentials: user='{username}', pass_len={len(password) if password else 0}", flush=True)
 
         if not username or not password:
-            raise Exception("Land Registry Username and Password are required. Please enter them in the form.")
+            raise Exception("Land Registry Username and Password are required. Set LAND_REGISTRY_USERNAME/PASSWORD in .env or provide them in the request.")
 
         result = LandRegistryResult(
             scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

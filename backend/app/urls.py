@@ -144,9 +144,9 @@ async def get_lps_valuation(
 
 @api_router.get("/scrapers/landregistry", tags=["scrapers"])
 async def landregistry_scraper(
-    username: str,
-    password: str,
     customer_reference: str,
+    username: str = None,
+    password: str = None,
     title_number: str = "",
     flat: str = "",
     house: str = "",
@@ -174,10 +174,10 @@ async def landregistry_scraper(
 
 @api_router.get("/scrapers/idu", tags=["scrapers"])
 async def get_idu(
-    username: str,
-    password: str,
     forename: str,
     surname: str,
+    username: str = None,
+    password: str = None,
     dd: str = "",
     mm: str = "",
     yyyy: str = "",
@@ -224,10 +224,10 @@ async def get_idu(
 
 @api_router.post("/scrapers/idu/start", tags=["scrapers"])
 async def start_idu(
-    username: str,
-    password: str,
     forename: str,
     surname: str,
+    username: str = None,
+    password: str = None,
     dd: str = "",
     mm: str = "",
     yyyy: str = "",
