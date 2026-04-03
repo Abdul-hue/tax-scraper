@@ -35,7 +35,7 @@ class CouncilTaxScraper:
         load_dotenv()
         self.config = config
         if headless is None:
-            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+            self.headless = True
         else:
             self.headless = headless
 

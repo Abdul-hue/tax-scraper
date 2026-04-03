@@ -26,7 +26,7 @@ class LpsScraper:
         from dotenv import load_dotenv
         load_dotenv()
         if headless is None:
-            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+            self.headless = True
         else:
             self.headless = headless
 
@@ -112,7 +112,7 @@ class LpsScraper:
             try:
                 with sync_playwright() as p:
                     browser = p.chromium.launch(
-                        headless=getattr(self, "headless", True),
+                        headless=self.headless,
                         args=get_browser_args()
                     )
                     context = browser.new_context(viewport={"width": 1280, "height": 1024})

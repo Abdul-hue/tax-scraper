@@ -35,9 +35,10 @@ function App() {
     const updateLrData = (key, value) => setLrData(prev => ({ ...prev, [key]: value }))
 
     const [iduData, setIduData] = useState({
-        username: '', password: '', forename: '', middlename: '', surname: '',
-        dd: '', mm: '', yyyy: '', gender: '', reference: '',
-        house: '', street: '', town: '', postcode: '',
+        username: 'Wasay', password: '4FuHqJMe#?T9cPY', 
+        forename: 'Michael', middlename: 'Stephen', surname: 'Smith',
+        dd: '15', mm: '06', yyyy: '1992', gender: 'Male', reference: 'TEST_123',
+        house: '', street: 'Denshaw Drive', town: 'Morley', postcode: 'LS27 8RR',
         email: '', email2: '', mobile: '', mobile2: '', landline: '', landline2: ''
     })
     const updateIduData = (key, value) => setIduData(prev => ({ ...prev, [key]: value }))

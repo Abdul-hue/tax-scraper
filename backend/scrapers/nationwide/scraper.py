@@ -12,7 +12,7 @@ TARGET_URL = "https://www.nationwide.co.uk/house-price-index"
 
 
 class NationwideScraper:
-    def __init__(self, config=None, headless=False):
+    def __init__(self, config=None, headless=True):
         self.config = config
         self.headless = headless
 

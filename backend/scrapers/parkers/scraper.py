@@ -29,7 +29,7 @@ class ParkersScraper:
         from dotenv import load_dotenv
         load_dotenv()
         if headless is None:
-            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+            self.headless = True
         else:
             self.headless = headless
 

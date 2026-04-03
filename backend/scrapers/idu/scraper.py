@@ -49,13 +49,13 @@ class IDUScraper:
         from dotenv import load_dotenv
         load_dotenv()
         if headless is None:
-            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+            self.headless = True
         else:
             self.headless = headless
 
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
-            headless=getattr(self, "headless", True), 
+            headless=True,  # Hardcoded to False for debugging
             slow_mo=self.slow_mo_ms,
             args=get_browser_args()
         )
@@ -134,7 +134,54 @@ class IDUScraper:
             except Exception:
                 raise
 
-            # Step 4 — Handle conflict / concurrent-session page automatically
+            # Step 4 — Handle /mfa/ intermediate page (device trust / additional MFA step)
+            if "/mfa/" in self.page.url or "/sso/" in self.page.url:
+                logger.warning("[Scraper] Still on MFA/SSO page after OTP: %s", self.page.url)
+                try:
+                    html_preview = self.page.content()[:2000]
+                    logger.warning("[Scraper] MFA page HTML preview:\n%s", html_preview)
+                    buttons = self.page.locator("button, input[type=submit]").all()
+                    for btn in buttons:
+                        try:
+                            logger.warning(
+                                "[Scraper] Visible element: tag=%s text=%r visible=%s",
+                                btn.evaluate("el => el.tagName"),
+                                btn.inner_text() if btn.is_visible() else "(hidden)",
+                                btn.is_visible(),
+                            )
+                        except Exception:
+                            pass
+                except Exception as log_err:
+                    logger.warning("[Scraper] Could not log MFA page details: %s", log_err)
+
+                mfa_handled = False
+                try:
+                    for keyword in ["Continue", "Accept", "Confirm", "Proceed"]:
+                        btn = self.page.get_by_role("button", name=keyword)
+                        if btn.is_visible(timeout=3000):
+                            logger.info("[Scraper] Clicking MFA button: %s", keyword)
+                            btn.click()
+                            self.page.wait_for_load_state("networkidle", timeout=15000)
+                            mfa_handled = True
+                            break
+                    if not mfa_handled:
+                        any_btn = self.page.locator("button, input[type=submit]").first
+                        if any_btn.is_visible(timeout=3000):
+                            logger.info("[Scraper] Clicking first visible MFA element as fallback")
+                            any_btn.click()
+                            self.page.wait_for_load_state("networkidle", timeout=15000)
+                            mfa_handled = True
+                except Exception as mfa_err:
+                    logger.warning("[Scraper] MFA handler error: %s", mfa_err)
+
+                if "/mfa/" in self.page.url or "/sso/" in self.page.url:
+                    logger.error(
+                        "[Scraper] STILL on MFA/SSO page after handler. URL: %s | Title: %s",
+                        self.page.url,
+                        self.page.title(),
+                    )
+
+            # Step 4b — Handle conflict / concurrent-session page automatically
             try:
                 self.page.wait_for_selector('[data-testid="accept"]', timeout=8000)
                 print("Conflict page detected — accepting automatically...")
@@ -150,7 +197,7 @@ class IDUScraper:
                 dashboard_indicator = self.page.locator("#hd-logout-button, .newSearch").or_(
                     self.page.get_by_text("You are logged in")
                 ).first
-                dashboard_indicator.wait_for(state="visible", timeout=10000)
+                dashboard_indicator.wait_for(state="visible", timeout=20000)
                 logger.info("Dashboard detected successfully")
             except Exception as e:
                 try:
@@ -203,7 +250,7 @@ class IDUScraper:
                     # re-initialize fresh
                     try:
                         self.browser = self.playwright.chromium.launch(
-                            headless=getattr(self, "headless", True), 
+                            headless=self.headless, 
                             slow_mo=self.slow_mo_ms,
                             args=get_browser_args()
                         )
@@ -367,6 +414,12 @@ class IDUScraper:
 
             except Exception as exc:  # per-attempt
                 logger.warning("Search attempt %s failed: %s", attempt, exc)
+                try:
+                    fail_ss = f"fail_attempt_{attempt}.png"
+                    self.page.screenshot(path=fail_ss, full_page=True)
+                    logger.info(f"Captured failure screenshot at: {fail_ss}")
+                except Exception as ss_err:
+                    logger.warning(f"Failed to capture error screenshot: {ss_err}")
                 last_exc = exc
                 if attempt < self.retry_limit:
                     backoff = 2 ** attempt

@@ -52,7 +52,7 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
     with _idu_operation_lock:
         with sync_playwright() as p:
             browser = p.chromium.launch(
-                headless=True,
+                headless=True,  # <-- disabled for debugging; revert to True once MFA flow is confirmed
                 args=get_browser_args(),
             )
             context = browser.new_context(
@@ -119,7 +119,60 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
                     page.click('[data-testid="otp-submit"]')
                     page.wait_for_load_state("networkidle", timeout=30000)
 
-                # Step 5 — Handle concurrent-session conflict page
+                # Step 5 — Handle /mfa/ intermediate page (device trust / additional MFA step)
+                if "/mfa/" in page.url or "/sso/" in page.url:
+                    logger.warning("[SessionKeeper] Still on MFA/SSO page after OTP: %s", page.url)
+                    try:
+                        html_preview = page.content()[:2000]
+                        logger.warning("[SessionKeeper] MFA page HTML preview:\n%s", html_preview)
+                        # Log all visible buttons and submit inputs
+                        buttons = page.locator("button, input[type=submit]").all()
+                        for btn in buttons:
+                            try:
+                                logger.warning(
+                                    "[SessionKeeper] Visible element: tag=%s text=%r visible=%s",
+                                    btn.evaluate("el => el.tagName"),
+                                    btn.inner_text() if btn.is_visible() else "(hidden)",
+                                    btn.is_visible(),
+                                )
+                            except Exception:
+                                pass
+                    except Exception as log_err:
+                        logger.warning("[SessionKeeper] Could not log MFA page details: %s", log_err)
+
+                    # Generic MFA handler — click Continue / Accept / Confirm / Proceed
+                    mfa_handled = False
+                    try:
+                        for keyword in ["Continue", "Accept", "Confirm", "Proceed"]:
+                            btn = page.get_by_role("button", name=keyword)
+                            if btn.is_visible(timeout=3000):
+                                logger.info("[SessionKeeper] Clicking MFA button: %s", keyword)
+                                btn.click()
+                                page.wait_for_load_state("networkidle", timeout=15000)
+                                mfa_handled = True
+                                break
+                        if not mfa_handled:
+                            # Fallback: click the first visible button
+                            any_btn = page.locator("button, input[type=submit]").first
+                            if any_btn.is_visible(timeout=3000):
+                                logger.info("[SessionKeeper] Clicking first visible MFA element as fallback")
+                                any_btn.click()
+                                page.wait_for_load_state("networkidle", timeout=15000)
+                                mfa_handled = True
+                    except Exception as mfa_err:
+                        logger.warning("[SessionKeeper] MFA handler error: %s", mfa_err)
+
+                    # Final check — if still stuck on MFA/SSO, log a full diagnostic
+                    if "/mfa/" in page.url or "/sso/" in page.url:
+                        logger.error(
+                            "[SessionKeeper] STILL on MFA/SSO page after handler. "
+                            "URL: %s | Title: %s | HTML: %s",
+                            page.url,
+                            page.title(),
+                            page.content()[:2000],
+                        )
+
+                # Step 5b — Handle concurrent-session conflict page
                 try:
                     page.wait_for_selector('[data-testid="accept"]', timeout=8000)
                     logger.info("[SessionKeeper] Conflict page — accepting...")
@@ -134,7 +187,7 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
                     indicator = page.locator("#hd-logout-button, .newSearch").or_(
                         page.get_by_text("You are logged in")
                     ).first
-                    indicator.wait_for(state="visible", timeout=15000)
+                    indicator.wait_for(state="visible", timeout=20000)
                     logger.info("[SessionKeeper] Dashboard confirmed at %s", page.url)
                 except Exception as e:
                     logger.error(

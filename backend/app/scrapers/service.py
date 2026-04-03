@@ -26,7 +26,9 @@ def _start_idu_keeper():
         _u = os.getenv("IDU_USERNAME", "")
         _p = os.getenv("IDU_PASSWORD", "")
         if _u and _p:
-            start_session_keeper(username=_u, password=_p)
+            # Disabled: do not auto-start IDU session keeper on startup.
+            # start_session_keeper(username=_u, password=_p)
+            pass
         else:
             logger.warning(
                 "IDU_USERNAME / IDU_PASSWORD not set in .env — "

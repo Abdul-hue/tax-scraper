@@ -17,7 +17,7 @@ PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 class LandRegistryScraper:
     def __init__(self, config=None, headless: bool = None):
         if headless is None:
-            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+            self.headless = True
         else:
             self.headless = headless
 
