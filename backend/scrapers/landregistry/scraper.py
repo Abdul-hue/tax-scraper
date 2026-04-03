@@ -17,7 +17,9 @@ PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 class LandRegistryScraper:
     def __init__(self, config=None, headless: bool = None):
         if headless is None:
-            self.headless = True
+            # Default to .env setting, fallback to True if not set
+            env_val = os.getenv("HEADLESS", "True").lower()
+            self.headless = (env_val == "true")
         else:
             self.headless = headless
 
@@ -57,13 +59,12 @@ class LandRegistryScraper:
             current_title = page.title().lower()
             current_url = page.url
 
-            # If we see common "not a challenge" titles or indicators
+            # If common Cloudflare indicators are gone, we are through
             if (
                 'just a moment' not in current_title and 
                 '__cf_chl' not in current_url and 
                 'challenge' not in current_title and
-                'loading' not in current_title and
-                page.locator("input#username").is_visible(timeout=500)
+                'loading' not in current_title
             ):
                 print(f"[LR-DEBUG] Cloudflare cleared after {i}s. Title='{page.title()}'", flush=True)
                 return True

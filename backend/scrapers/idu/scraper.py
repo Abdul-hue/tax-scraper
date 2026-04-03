@@ -49,13 +49,14 @@ class IDUScraper:
         from dotenv import load_dotenv
         load_dotenv()
         if headless is None:
-            self.headless = True
+            env_val = os.getenv("HEADLESS", "True").lower()
+            self.headless = (env_val == "true")
         else:
             self.headless = headless
 
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
-            headless=True,  # Hardcoded to False for debugging
+            headless=self.headless,
             slow_mo=self.slow_mo_ms,
             args=get_browser_args()
         )
