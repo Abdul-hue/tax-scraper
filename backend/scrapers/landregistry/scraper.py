@@ -24,16 +24,14 @@ class LandRegistryScraper:
             self.headless = headless
 
     def _cleanup_profile(self, profile_path: Path):
-        """Delete stale lock files from the profile directory."""
-        lock_files = ["SingletonLock", "SingletonCookie", "SingletonSocket"]
-        for lock_file in lock_files:
-            file_path = profile_path / lock_file
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                    logger.info(f"Deleted stale lock file: {lock_file}")
-                except Exception as e:
-                    logger.warning(f"Could not delete lock file {lock_file}: {e}")
+        """Delete the entire profile directory to ensure a fresh session and bypass sticky Cloudflare blocks."""
+        import shutil
+        if profile_path.exists():
+            try:
+                shutil.rmtree(profile_path)
+                logger.info(f"Deep cleaned browser profile: {profile_path.name}")
+            except Exception as e:
+                logger.warning(f"Could not deep clean profile {profile_path}: {e}")
 
     def _wait_for_cloudflare(self, page, max_wait: int = 60):
         """Wait for Cloudflare challenge to resolve."""
