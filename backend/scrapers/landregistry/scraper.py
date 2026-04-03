@@ -172,7 +172,7 @@ class LandRegistryScraper:
 
                 # Handle Cloudflare
                 if 'just a moment' in page.title().lower() or '__cf_chl' in page.url or 'challenge' in page.title().lower():
-                    resolved = self._wait_for_cloudflare(page, max_wait=30)
+                    resolved = self._wait_for_cloudflare(page, max_wait=60)
                     if not resolved:
                         self._take_error_screenshot(page, "landregistry_cloudflare_blocked")
                         raise Exception("Cloudflare challenge did not resolve. Try using a UK residential proxy.")
