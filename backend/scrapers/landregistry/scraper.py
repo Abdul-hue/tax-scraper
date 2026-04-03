@@ -72,16 +72,29 @@ class LandRegistryScraper:
             if i % 2 == 0:
                 print(f"[LR-DEBUG] CF wait {i+1}s - title='{page.title()}', url={current_url[:80]}", flush=True)
 
-            # Try clicking Turnstile checkbox periodically
-            if i % 10 == 0 and i > 0:
+            # --- NEW LEVEL 2 STEALTH: ACTIVE HUMAN INTERACTION ---
+            # Random mouse movements during the wait to look natural
+            if i % 5 == 0:
+                page.mouse.move(random.randint(50, 500), random.randint(50, 500))
+                if i % 10 == 0:
+                    page.mouse.wheel(0, random.choice([100, -100]))
+
+            # Try clicking Turnstile checkbox periodically with more precision
+            if i % 8 == 0 and i > 0:
                 try:
                     turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
                     if turnstile.is_visible(timeout=1000):
+                        turnstile.scroll_into_view_if_needed()
                         box = turnstile.bounding_box()
                         if box:
-                            page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+                            # Move mouse to box first then click
+                            cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+                            page.mouse.move(cx, cy, steps=5)
+                            page.mouse.click(cx, cy)
+                            print(f"[LR-DEBUG] Precise Turnstile click at ({cx}, {cy})", flush=True)
                 except Exception:
                     pass
+            # -----------------------------------------------------
 
             page.wait_for_timeout(1000)
 
