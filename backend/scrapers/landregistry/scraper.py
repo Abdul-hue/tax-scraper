@@ -33,19 +33,22 @@ class LandRegistryScraper:
                 except Exception as e:
                     logger.warning(f"Could not delete lock file {lock_file}: {e}")
 
-    def _wait_for_cloudflare(self, page, max_wait: int = 30):
+    def _wait_for_cloudflare(self, page, max_wait: int = 60):
         """Wait for Cloudflare challenge to resolve."""
         print("[LR-DEBUG] Checking for Cloudflare challenge...", flush=True)
 
         # First handle Turnstile iframe if present
         try:
             turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
-            if turnstile.is_visible(timeout=3000):
+            if turnstile.is_visible(timeout=5000):
                 print("[LR-DEBUG] Turnstile iframe detected — clicking to trigger verification...", flush=True)
-                page.mouse.move(300, 300)
-                page.wait_for_timeout(1000)
-                page.mouse.click(300, 300)
-                page.wait_for_timeout(2000)
+                # Scroll to it
+                turnstile.scroll_into_view_if_needed()
+                # Use bounding box to click center
+                box = turnstile.bounding_box()
+                if box:
+                    page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+                page.wait_for_timeout(3000)
         except Exception:
             pass
 
@@ -54,23 +57,28 @@ class LandRegistryScraper:
             current_title = page.title().lower()
             current_url = page.url
 
-            if 'just a moment' not in current_title and '__cf_chl' not in current_url and 'challenge' not in current_title:
+            # If we see common "not a challenge" titles or indicators
+            if (
+                'just a moment' not in current_title and 
+                '__cf_chl' not in current_url and 
+                'challenge' not in current_title and
+                'loading' not in current_title and
+                page.locator("input#username").is_visible(timeout=500)
+            ):
                 print(f"[LR-DEBUG] Cloudflare cleared after {i}s. Title='{page.title()}'", flush=True)
                 return True
 
-            print(f"[LR-DEBUG] CF wait {i+1}s - title='{page.title()}', url={current_url[:80]}", flush=True)
+            if i % 2 == 0:
+                print(f"[LR-DEBUG] CF wait {i+1}s - title='{page.title()}', url={current_url[:80]}", flush=True)
 
-            # Try clicking Turnstile checkbox every 5 seconds
-            if i % 5 == 0:
+            # Try clicking Turnstile checkbox periodically
+            if i % 10 == 0 and i > 0:
                 try:
                     turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
                     if turnstile.is_visible(timeout=1000):
                         box = turnstile.bounding_box()
                         if box:
-                            cx = box['x'] + box['width'] / 2
-                            cy = box['y'] + box['height'] / 2
-                            page.mouse.click(cx, cy)
-                            print(f"[LR-DEBUG] Clicked Turnstile iframe center at ({cx}, {cy})", flush=True)
+                            page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
                 except Exception:
                     pass
 

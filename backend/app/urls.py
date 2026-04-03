@@ -15,9 +15,7 @@ from app.scrapers.service import (
 api_router = APIRouter()
 
 def scraper_response(result: dict) -> Response:
-    """Check for error in result and return 500 if present, else 200."""
-    if result.get("error"):
-        return JSONResponse(status_code=500, content=result)
+    """Return JSON response. We return 200 even if the scraper reported an error so the frontend can display it."""
     return JSONResponse(status_code=200, content=result)
 
 # Include existing routers
