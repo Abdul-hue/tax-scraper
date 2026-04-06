@@ -147,7 +147,7 @@ async def run_tax_scraper(
             return scraper.scrape(config, screenshot=True)
 
     result = await loop.run_in_executor(None, _run_sync)
-    return result.to_dict()
+    return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
 async def run_counciltax_scraper(postcode: str):
@@ -163,7 +163,7 @@ async def run_counciltax_scraper(postcode: str):
             return scraper.lookup(postcode)
 
     result = await loop.run_in_executor(None, _run_sync)
-    return result.to_dict()
+    return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
 async def run_parkers_scraper(plate: str):
@@ -177,7 +177,7 @@ async def run_parkers_scraper(plate: str):
         return scraper.valuate_by_reg(plate)
 
     result = await loop.run_in_executor(None, _run_sync)
-    return result.to_dict()
+    return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
 async def run_nationwide_scraper(
@@ -209,7 +209,7 @@ async def run_nationwide_scraper(
             return scraper.scrape(query)
 
     result = await loop.run_in_executor(None, _run_sync)
-    return result.to_dict()
+    return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
 async def run_lps_scraper(
@@ -243,7 +243,7 @@ async def run_lps_scraper(
         loop = asyncio.get_event_loop()
         scraper = LpsScraper()
         result = await loop.run_in_executor(None, scraper.scrape, query)
-        return result.to_dict()
+        return result.to_dict() if hasattr(result, 'to_dict') else result
     except Exception as e:
         # Assuming 'logger' is available or imported elsewhere, otherwise use print
         return {"error": str(e), "results": []}
@@ -288,7 +288,7 @@ async def run_landregistry_scraper(
         print("[LR-SERVICE] Starting LandRegistryScraper...", flush=True)
         result = await loop.run_in_executor(None, LandRegistryScraper().scrape, query)
         print("[LR-SERVICE] Scraper completed successfully!", flush=True)
-        return result.to_dict()
+        return result.to_dict() if hasattr(result, 'to_dict') else result
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
@@ -372,7 +372,7 @@ async def run_idu_scraper_start(
 
             _save_idu_result(sid, {
                 "status": "complete",
-                "result": result.to_dict()
+                "result": result.to_dict() if hasattr(result, 'to_dict') else result
             })
         except Exception as e:
             _save_idu_result(sid, {
@@ -464,12 +464,24 @@ async def run_idu_scraper(
         landline2=landline2,
     )
 
-    def _run_idu_sync(user, pwd, conf):
-        try:
-            return _run_idu_task(user, pwd, lambda s: s.search(conf).to_dict())
-        except Exception as e:
-            return {"error": str(e)}
+    try:
+        def _run_idu_sync(user, pwd, conf):
+            try:
+                def _safe_task(s):
+                    res = s.search(conf)
+                    # If res is already a dict (e.g. error or No Match), don't call to_dict()
+                    if hasattr(res, 'to_dict'):
+                        return res.to_dict()
+                    return res
+                return _run_idu_task(user, pwd, _safe_task)
+            except Exception as e:
+                import traceback
+                logger.error(f"IDU Internal Sync Error: {e}\n{traceback.format_exc()}")
+                return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
 
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _run_idu_sync, username, password, config)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _run_idu_sync, username, password, config)
+    except Exception as outer_e:
+        import traceback
+        return {"status": "error", "error": str(outer_e), "traceback": traceback.format_exc()}
 

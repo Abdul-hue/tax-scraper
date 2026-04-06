@@ -347,16 +347,16 @@ class IDUScraper:
                     self.page.wait_for_selector("#result-summary-status", timeout=15000)
                 except Exception:
                     logger.warning("0 results found (timeout waiting for #result-summary-status). Returning No Matches.")
-                    return {
-                        "status": "success",
-                        "scraped_at": None,
-                        "search_id": None,
-                        "verdict": "No Match Found",
-                        "score": "N/A",
-                        "screenshot_url": None,
-                        "summary_items": [],
-                        "error": None
-                    }
+                    return IDUResult(
+                        config = (config.__dict__ if hasattr(config, "__dict__") else {}),
+                        scraped_at = time.strftime("%Y-%m-%d %H:%M:%S"),
+                        search_id = None,
+                        verdict = "No Match Found",
+                        score = "N/A",
+                        summary_items = [],
+                        screenshot_url = None,
+                        error = None
+                    )
                 
                 # FIX: Ensure all dynamic result sections are fully loaded
                 try:

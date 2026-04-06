@@ -30,8 +30,8 @@ os.makedirs("static/pdfs", exist_ok=True)
 # Mount static folder (served at /static/<path>)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Include all API routes
-app.include_router(api_router)
+# Include all API routes under /api prefix
+app.include_router(api_router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn
