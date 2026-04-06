@@ -12,6 +12,17 @@ if sys.platform == "win32":
 
 app = FastAPI(title="Scraper API")
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://192.168.80.52:2310",
+        "http://192.168.80.52:2510"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # Ensure static directory exists for screenshots and PDFs
 os.makedirs("static/screenshots", exist_ok=True)
 os.makedirs("static/pdfs", exist_ok=True)
@@ -19,8 +30,8 @@ os.makedirs("static/pdfs", exist_ok=True)
 # Mount static folder (served at /static/<path>)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Include all API routes
-app.include_router(api_router)
+# Include all API routes under /api prefix
+app.include_router(api_router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn

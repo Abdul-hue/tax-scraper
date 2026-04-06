@@ -22,20 +22,26 @@ class IDUScraper:
     Session persistence: manual MFA once, then cookies saved.
     """
 
+    # Absolute path to the session file, relative to this module's directory
+    _DEFAULT_SESSION_FILE: str = str(
+        Path(__file__).parent.parent.parent / "output" / "sessions" / "idu_session.json"
+    )
+
     def __init__(
         self,
         username: str,
         password: str,
-        session_file: str = "output/sessions/idu_session.json",
+        session_file: str = None,
         headless: bool = None,
-        output_dir: str = "output",
+        output_dir: str = None,
         retry_limit: int = 3,
         slow_mo_ms: int = 0,
     ) -> None:
         self.username = username
         self.password = password
-        self.session_file = session_file
-        self.output_dir = Path(output_dir)
+        self.session_file = session_file or self._DEFAULT_SESSION_FILE
+        _default_output = Path(__file__).parent.parent.parent / "output"
+        self.output_dir = Path(output_dir) if output_dir else _default_output
         self.retry_limit = retry_limit
         self.slow_mo_ms = slow_mo_ms
         self.otp_used = False
@@ -43,13 +49,14 @@ class IDUScraper:
         from dotenv import load_dotenv
         load_dotenv()
         if headless is None:
-            self.headless = os.getenv("HEADLESS", "true").lower() == "true"
+            env_val = os.getenv("HEADLESS", "True").lower()
+            self.headless = (env_val == "true")
         else:
             self.headless = headless
 
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
-            headless=False, 
+            headless=self.headless,
             slow_mo=self.slow_mo_ms,
             args=get_browser_args()
         )
@@ -63,13 +70,27 @@ class IDUScraper:
 
     def _ensure_logged_in(self) -> None:
         try:
+            # ----------------------------------------------------------------
+            # Try to restore a saved session first — this is the fast path
+            # that avoids login + OTP on every run.
+            # ----------------------------------------------------------------
             loaded = session_mod.load_session(self.context, self.session_file)
             if loaded:
                 if session_mod.is_session_valid(self.page):
-                    logger.info("Session restored, skipping login")
+                    logger.info("Session restored from file — skipping login entirely")
                     return
+                else:
+                    # Session file exists but is expired/invalid — remove it so
+                    # a fresh login produces a clean new file.
+                    logger.info("Saved session is invalid or expired — deleting and re-logging in")
+                    session_mod.delete_session(self.session_file)
+
+            # ----------------------------------------------------------------
+            # Full login flow (only runs when no valid session exists)
+            # ----------------------------------------------------------------
 
             # Step 1 — Go to login page
+            logger.info("Starting full login flow...")
             self.page.goto("https://sso.tracesmart.co.uk/login/idu", timeout=30000)
             self.page.wait_for_selector("#username", timeout=20000)
             self.page.fill("#username", self.username)
@@ -77,65 +98,97 @@ class IDUScraper:
             self.page.click('input[data-testid="sign-in"]')
 
             # Step 2 — Handle "Send One Time Password" page
+            _otp_trigger_time = time.time()  # marks when OTP was triggered
             try:
                 otp_send_btn = self.page.locator('[data-testid="otp-send"]')
                 if otp_send_btn.is_visible(timeout=3000):
-                    print("Clicking 'Send One Time Password' automatically...")
+                    logger.info("Clicking 'Send One Time Password' automatically...")
+                    _otp_trigger_time = time.time()
                     otp_send_btn.click()
                     self.page.wait_for_load_state("networkidle", timeout=15000)
                 else:
-                    print("OTP send button not found, skipping send step...")
+                    logger.debug("OTP send button not found — may not be required")
             except Exception:
-                print("OTP send page not shown, continuing...")
+                logger.debug("OTP send page not shown, continuing...")
 
-            # Step 3 — Wait for OTP via external injection if available
+            # Step 3 — Handle OTP input (fully automated via email)
             try:
                 self.page.wait_for_selector('[data-testid="otp-code"]', timeout=10000)
-                
-                # Check if we have an external OTP mechanism
-                if hasattr(self, 'otp_event') and hasattr(self, 'otp_value'):
-                    if self.otp_used:
-                        print("Resetting stale OTP event/value for retry...")
-                        self.otp_event.clear()
-                        self.otp_value["code"] = ""
-                        self.otp_used = False
 
-                    print("Waiting for external OTP injection...")
-                    
-                    # Communicate status to service result storage
-                    if hasattr(self, 'session_id'):
-                        from app.scrapers.service import _save_idu_result
-                        _save_idu_result(self.session_id, {"status": "awaiting_otp"})
-
-                    signaled = self.otp_event.wait(timeout=300)
-                    if signaled:
-                        code = self.otp_value.get("code", "")
-                        if code:
-                            print(f"Injecting OTP code: {code}")
-                            self.page.fill('[data-testid="otp-code"]', code)
-                            self.page.click('[data-testid="otp-submit"]')  # ← FIXED
-                            self.otp_used = True
-                            self.page.wait_for_load_state("networkidle", timeout=30000)
-                        else:
-                            print("OTP event signaled but no code found")
-                    else:
-                        print("Timed out waiting for external OTP")
+                from .otp_email import fetch_otp_from_email
+                logger.info("OTP field detected — auto-fetching from email...")
+                code = fetch_otp_from_email(
+                    poll_interval=5.0,
+                    timeout=120.0,
+                    since_timestamp=_otp_trigger_time,
+                )
+                if code:
+                    logger.info("Auto-injecting email OTP: %s", code)
+                    self.page.fill('[data-testid="otp-code"]', code)
+                    self.page.click('[data-testid="otp-submit"]')
+                    try:
+                        self.page.wait_for_load_state("networkidle", timeout=30000)
+                    except Exception:
+                        logger.debug("Network did not go idle after OTP submission, proceeding anyway")
                 else:
-                    print("Waiting for user to enter OTP in the browser...")
-                    # Wait until the OTP page disappears (user clicked Continue)
-                    self.page.wait_for_selector(
-                        '[data-testid="otp-code"]', 
-                        state="hidden", 
-                        timeout=120000  # wait up to 2 minutes
+                    raise RuntimeError(
+                        "OTP not received from email within timeout. "
+                        "Check OTP_EMAIL_* settings in .env and IMAP access on the account."
                     )
-                    self.page.wait_for_load_state("networkidle", timeout=30000)
             except Exception:
-                pass
+                raise
 
-            # Step 4 — Handle conflict page automatically
+            # Step 4 — Handle /mfa/ intermediate page (device trust / additional MFA step)
+            if "/mfa/" in self.page.url or "/sso/" in self.page.url:
+                logger.warning("[Scraper] Still on MFA/SSO page after OTP: %s", self.page.url)
+                try:
+                    html_preview = self.page.content()[:2000]
+                    logger.warning("[Scraper] MFA page HTML preview:\n%s", html_preview)
+                    buttons = self.page.locator("button, input[type=submit]").all()
+                    for btn in buttons:
+                        try:
+                            logger.warning(
+                                "[Scraper] Visible element: tag=%s text=%r visible=%s",
+                                btn.evaluate("el => el.tagName"),
+                                btn.inner_text() if btn.is_visible() else "(hidden)",
+                                btn.is_visible(),
+                            )
+                        except Exception:
+                            pass
+                except Exception as log_err:
+                    logger.warning("[Scraper] Could not log MFA page details: %s", log_err)
+
+                mfa_handled = False
+                try:
+                    for keyword in ["Continue", "Accept", "Confirm", "Proceed"]:
+                        btn = self.page.get_by_role("button", name=keyword)
+                        if btn.is_visible(timeout=3000):
+                            logger.info("[Scraper] Clicking MFA button: %s", keyword)
+                            btn.click()
+                            self.page.wait_for_load_state("networkidle", timeout=15000)
+                            mfa_handled = True
+                            break
+                    if not mfa_handled:
+                        any_btn = self.page.locator("button, input[type=submit]").first
+                        if any_btn.is_visible(timeout=3000):
+                            logger.info("[Scraper] Clicking first visible MFA element as fallback")
+                            any_btn.click()
+                            self.page.wait_for_load_state("networkidle", timeout=15000)
+                            mfa_handled = True
+                except Exception as mfa_err:
+                    logger.warning("[Scraper] MFA handler error: %s", mfa_err)
+
+                if "/mfa/" in self.page.url or "/sso/" in self.page.url:
+                    logger.error(
+                        "[Scraper] STILL on MFA/SSO page after handler. URL: %s | Title: %s",
+                        self.page.url,
+                        self.page.title(),
+                    )
+
+            # Step 4b — Handle conflict / concurrent-session page automatically
             try:
                 self.page.wait_for_selector('[data-testid="accept"]', timeout=8000)
-                print("Conflict page detected — signing in automatically...")
+                print("Conflict page detected — accepting automatically...")
                 self.page.click('[data-testid="accept"]')
                 self.page.wait_for_load_state("networkidle", timeout=15000)
             except Exception:
@@ -144,26 +197,36 @@ class IDUScraper:
             # Step 5 — Verify we are now logged in
             logger.info(f"Final login check at URL: {self.page.url}")
             try:
-                # Wait longer for dashboard and ensure network is idle
-                self.page.wait_for_load_state("networkidle", timeout=10000)
+                try:
+                    self.page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    logger.debug("Network did not go idle during final login check, proceeding with indicator check")
                 
-                # Check for various dashboard indicators using valid selectors
-                # Combine CSS selectors with a separate text check using .or_()
                 dashboard_indicator = self.page.locator("#hd-logout-button, .newSearch").or_(
                     self.page.get_by_text("You are logged in")
                 ).first
-                dashboard_indicator.wait_for(state="visible", timeout=10000)
-                
+                dashboard_indicator.wait_for(state="visible", timeout=20000)
                 logger.info("Dashboard detected successfully")
             except Exception as e:
                 try:
-                    logger.error(f"Dashboard detection failed. URL: {self.page.url}, Title: {self.page.title()}")
+                    logger.error(
+                        f"Dashboard detection failed. URL: {self.page.url}, "
+                        f"Title: {self.page.title()}"
+                    )
                 except Exception:
                     logger.error("Dashboard detection failed. Page was already closed.")
-                raise RuntimeError(f"Login failed — dashboard not detected after MFA: {str(e)}")
+                raise RuntimeError(
+                    f"Login failed — dashboard not detected after MFA: {str(e)}"
+                )
 
+            # ----------------------------------------------------------------
+            # Save session so ALL future runs skip login entirely
+            # ----------------------------------------------------------------
             session_mod.save_session(self.context, self.session_file)
-            logger.info("Session saved")
+            logger.info(
+                "Session saved to %s — next run will skip login and OTP",
+                self.session_file,
+            )
             return
 
         except Exception:
@@ -195,7 +258,7 @@ class IDUScraper:
                     # re-initialize fresh
                     try:
                         self.browser = self.playwright.chromium.launch(
-                            headless=False, 
+                            headless=self.headless, 
                             slow_mo=self.slow_mo_ms,
                             args=get_browser_args()
                         )
@@ -280,7 +343,20 @@ class IDUScraper:
                 
                 # Wait for results page to fully render
                 logger.info("Form submitted, waiting for results to render...")
-                self.page.wait_for_selector("#result-summary-status", timeout=30000)
+                try:
+                    self.page.wait_for_selector("#result-summary-status", timeout=15000)
+                except Exception:
+                    logger.warning("0 results found (timeout waiting for #result-summary-status). Returning No Matches.")
+                    return IDUResult(
+                        config = (config.__dict__ if hasattr(config, "__dict__") else {}),
+                        scraped_at = time.strftime("%Y-%m-%d %H:%M:%S"),
+                        search_id = None,
+                        verdict = "No Match Found",
+                        score = "N/A",
+                        summary_items = [],
+                        screenshot_url = None,
+                        error = None
+                    )
                 
                 # FIX: Ensure all dynamic result sections are fully loaded
                 try:
@@ -359,6 +435,12 @@ class IDUScraper:
 
             except Exception as exc:  # per-attempt
                 logger.warning("Search attempt %s failed: %s", attempt, exc)
+                try:
+                    fail_ss = f"fail_attempt_{attempt}.png"
+                    self.page.screenshot(path=fail_ss, full_page=True)
+                    logger.info(f"Captured failure screenshot at: {fail_ss}")
+                except Exception as ss_err:
+                    logger.warning(f"Failed to capture error screenshot: {ss_err}")
                 last_exc = exc
                 if attempt < self.retry_limit:
                     backoff = 2 ** attempt

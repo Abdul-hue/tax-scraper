@@ -11,13 +11,71 @@ import json
 import os
 import time
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# ── IDU background session keeper ─────────────────────────────────────────────
+# Started once at module-import time so the session is always warm.
+# No human intervention ever required.
+def _start_idu_keeper():
+    try:
+        from scrapers.idu.session_keeper import start_session_keeper
+        _u = os.getenv("IDU_USERNAME", "")
+        _p = os.getenv("IDU_PASSWORD", "")
+        if _u and _p:
+            # Disabled: do not auto-start IDU session keeper on startup.
+            # start_session_keeper(username=_u, password=_p)
+            pass
+        else:
+            logger.warning(
+                "IDU_USERNAME / IDU_PASSWORD not set in .env — "
+                "session keeper not started. Set them to enable full automation."
+            )
+    except Exception as exc:
+        logger.warning("Could not start IDU session keeper: %s", exc)
+
+# Run in a short-lived thread so it doesn't block module import
+threading.Thread(target=_start_idu_keeper, daemon=True, name="IDUKeeperStarter").start()
+# ──────────────────────────────────────────────────────────────────────────────
 
 # Global session storage for IDU OTP flow
 # active_idu_sessions remains in-memory because it holds live Playwright/Browser objects 
 # which cannot be serialized to disk. However, active_idu_results is now file-based.
 active_idu_sessions = {}  # session_id -> IDUScraper instance
+
+
+# ── IDU Threading Lock ───────────────────────────────────────────────────────
+# Used to ensure only one thread at a time performs core IDU browser operations.
+# Playwright's sync_api is strictly bound to the thread that created it.
+# We no longer use a singleton IDUScraper object; instead, we create a fresh 
+# instance per request, which is 100% thread-safe.
+_idu_operation_lock = threading.Lock()
+
+def _run_idu_task(user: str, pwd: str, task_fn):
+    """
+    Safely execute an IDU task in a dedicated Playwright instance.
+    The instance loads the shared session file maintained by the background keeper.
+    """
+    from scrapers.idu.scraper import IDUScraper
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    username = user or os.getenv("IDU_USERNAME", "")
+    password = pwd or os.getenv("IDU_PASSWORD", "")
+
+    # We use a lock mainly to prevent two threads from trying to 
+    # update the session file simultaneously if it ever expires.
+    with _idu_operation_lock:
+        scraper = IDUScraper(username=username, password=password, headless=True)
+        try:
+            return task_fn(scraper)
+        finally:
+            scraper.close()
+
 
 # File-based result storage
 SESSION_RESULT_DIR = Path("backend/output/sessions/results")
@@ -89,7 +147,7 @@ async def run_tax_scraper(
             return scraper.scrape(config, screenshot=True)
 
     result = await loop.run_in_executor(None, _run_sync)
-    return result.to_dict()
+    return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
 async def run_counciltax_scraper(postcode: str):
@@ -105,7 +163,7 @@ async def run_counciltax_scraper(postcode: str):
             return scraper.lookup(postcode)
 
     result = await loop.run_in_executor(None, _run_sync)
-    return result.to_dict()
+    return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
 async def run_parkers_scraper(plate: str):
@@ -119,7 +177,7 @@ async def run_parkers_scraper(plate: str):
         return scraper.valuate_by_reg(plate)
 
     result = await loop.run_in_executor(None, _run_sync)
-    return result.to_dict()
+    return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
 async def run_nationwide_scraper(
@@ -151,7 +209,7 @@ async def run_nationwide_scraper(
             return scraper.scrape(query)
 
     result = await loop.run_in_executor(None, _run_sync)
-    return result.to_dict()
+    return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
 async def run_lps_scraper(
@@ -185,16 +243,16 @@ async def run_lps_scraper(
         loop = asyncio.get_event_loop()
         scraper = LpsScraper()
         result = await loop.run_in_executor(None, scraper.scrape, query)
-        return result.to_dict()
+        return result.to_dict() if hasattr(result, 'to_dict') else result
     except Exception as e:
         # Assuming 'logger' is available or imported elsewhere, otherwise use print
         return {"error": str(e), "results": []}
 
 
 async def run_landregistry_scraper(
-    username: str,
-    password: str,
     customer_reference: str,
+    username: str = None,
+    password: str = None,
     title_number: str = "",
     flat: str = "",
     house: str = "",
@@ -227,29 +285,30 @@ async def run_landregistry_scraper(
 
     try:
         loop = asyncio.get_event_loop()
+        print("[LR-SERVICE] Starting LandRegistryScraper...", flush=True)
         result = await loop.run_in_executor(None, LandRegistryScraper().scrape, query)
-        return result.to_dict()
+        print("[LR-SERVICE] Scraper completed successfully!", flush=True)
+        return result.to_dict() if hasattr(result, 'to_dict') else result
     except Exception as e:
         import traceback
-        # Assuming logger is defined elsewhere or use print if not
-        try:
-            logger.error(f"Land Registry scraper service error: {e}", exc_info=True)
-        except NameError:
-            print(f"Land Registry scraper service error: {e}")
+        tb = traceback.format_exc()
+        print(f"[LR-SERVICE] ERROR: {e}", flush=True)
+        print(f"[LR-SERVICE] TRACEBACK:\n{tb}", flush=True)
+        logger.error(f"Land Registry scraper service error: {e}", exc_info=True)
             
         return {
             "error": str(e),
-            "traceback": traceback.format_exc(),
+            "traceback": tb,
             "register_data": {},
             "title_plan_data": {}
         }
 
 
 async def run_idu_scraper_start(
-    username: str,
-    password: str,
     forename: str,
     surname: str,
+    username: str = None,
+    password: str = None,
     dd: str = "",
     mm: str = "",
     yyyy: str = "",
@@ -271,7 +330,6 @@ async def run_idu_scraper_start(
     Step 1: Start IDU scraper in background, wait for OTP.
     """
     from scrapers.idu.models import IDUConfig
-    from scrapers.idu.scraper import IDUScraper
 
     session_id = str(uuid.uuid4())
     
@@ -300,20 +358,21 @@ async def run_idu_scraper_start(
         try:
             _cleanup_old_sessions()
             _save_idu_result(sid, {"status": "processing"})
-            scraper = IDUScraper(username=user, password=pwd, headless=True)
-            
-            # Setup OTP sync mechanism
-            scraper.otp_event = threading.Event()
-            scraper.otp_value = {"code": ""}
-            scraper.session_id = sid  # Attach session_id for status communication
-            active_idu_sessions[sid] = scraper
-            
-            # Start search (which will call _ensure_logged_in and wait for otp_event)
-            result = scraper.search(conf, screenshot=True)
-            
+
+            def _logic(scraper):
+                # Attach OTP sync for Step 1-2 flow
+                scraper.otp_event = threading.Event()
+                scraper.otp_value = {"code": ""}
+                scraper.session_id = sid
+                active_idu_sessions[sid] = scraper
+                # The browser will load the background-keeper's session file automatically
+                return scraper.search(conf, screenshot=True)
+
+            result = _run_idu_task(user, pwd, _logic)
+
             _save_idu_result(sid, {
                 "status": "complete",
-                "result": result.to_dict()
+                "result": result.to_dict() if hasattr(result, 'to_dict') else result
             })
         except Exception as e:
             _save_idu_result(sid, {
@@ -321,14 +380,9 @@ async def run_idu_scraper_start(
                 "message": str(e)
             })
         finally:
-            # Cleanup session after processing
             if sid in active_idu_sessions:
-                try:
-                    active_idu_sessions[sid].browser.close()
-                    active_idu_sessions[sid].playwright.stop()
-                except:
-                    pass
                 del active_idu_sessions[sid]
+
 
     # Run in background thread
     thread = threading.Thread(
@@ -345,14 +399,7 @@ async def run_idu_scraper_submit_otp(session_id: str, otp: str):
     """
     Step 2: Submit OTP to unblock the background scraper.
     """
-    if session_id not in active_idu_sessions:
-        return {"error": "Session not found or already closed"}
-    
-    scraper = active_idu_sessions[session_id]
-    scraper.otp_value["code"] = otp
-    scraper.otp_event.set()
-    
-    return {"status": "processing"}
+    return {"status": "error", "message": "Manual OTP submission is deprecated. The system is fully automated via email."}
 
 
 async def run_idu_scraper_get_result(session_id: str):
@@ -368,10 +415,10 @@ async def run_idu_scraper_get_result(session_id: str):
 
 
 async def run_idu_scraper(
-    username: str,
-    password: str,
     forename: str,
     surname: str,
+    username: str = None,
+    password: str = None,
     dd: str = "",
     mm: str = "",
     yyyy: str = "",
@@ -417,14 +464,24 @@ async def run_idu_scraper(
         landline2=landline2,
     )
 
-    def _run_idu_sync(user, pwd, conf):
-        try:
-            scraper = IDUScraper(username=user, password=pwd, headless=True)
-            result = scraper.search(conf)
-            return result.to_dict()
-        except Exception as e:
-            return {"error": str(e)}
+    try:
+        def _run_idu_sync(user, pwd, conf):
+            try:
+                def _safe_task(s):
+                    res = s.search(conf)
+                    # If res is already a dict (e.g. error or No Match), don't call to_dict()
+                    if hasattr(res, 'to_dict'):
+                        return res.to_dict()
+                    return res
+                return _run_idu_task(user, pwd, _safe_task)
+            except Exception as e:
+                import traceback
+                logger.error(f"IDU Internal Sync Error: {e}\n{traceback.format_exc()}")
+                return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
 
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _run_idu_sync, username, password, config)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _run_idu_sync, username, password, config)
+    except Exception as outer_e:
+        import traceback
+        return {"status": "error", "error": str(outer_e), "traceback": traceback.format_exc()}
 
