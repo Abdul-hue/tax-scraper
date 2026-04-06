@@ -11,9 +11,13 @@ def run_idu_test():
     # 1. Load config from .env
     load_dotenv()
     
-    internal_api_base = os.environ.get("INTERNAL_API_BASE", "http://192.168.80.52:3412")
-    # Use the corrected path with /api prefix as required by backend routing
-    endpoint = f"{internal_api_base}/api/scrapers/idu"
+    internal_api_base = os.environ.get("INTERNAL_API_BASE", "http://localhost:8000")
+    # If hitting production via Nginx (port 3412), we need the /api prefix.
+    # Otherwise, hitting FastAPI directly (port 8000), we don't.
+    if ":3412" in internal_api_base:
+        endpoint = f"{internal_api_base}/api/scrapers/idu"
+    else:
+        endpoint = f"{internal_api_base}/scrapers/idu"
 
     # 2. Setup Payload (Sample identity data)
     params = {
