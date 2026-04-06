@@ -11,7 +11,7 @@ def run_idu_test():
     # 1. Load config from .env
     load_dotenv()
     
-    internal_api_base = os.environ.get("INTERNAL_API_BASE", "http://localhost:8000")
+    internal_api_base = os.environ.get("INTERNAL_API_BASE", "http://192.168.80.52:3412")
     # Use the corrected path with /api prefix as required by backend routing
     endpoint = f"{internal_api_base}/api/scrapers/idu"
 
