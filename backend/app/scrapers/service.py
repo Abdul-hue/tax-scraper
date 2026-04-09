@@ -180,6 +180,23 @@ async def run_parkers_scraper(plate: str):
     return result.to_dict() if hasattr(result, 'to_dict') else result
 
 
+async def run_mouseprice_scraper(postcode: str):
+    """
+    Service function to bootstrap the Mouseprice scraping process.
+    """
+    import asyncio
+    from scrapers.mouseprice_scraper import MousePriceScraper
+
+    loop = asyncio.get_running_loop()
+
+    def _run_sync():
+        scraper = MousePriceScraper()
+        return scraper.scrape_postcode(postcode)
+
+    result = await loop.run_in_executor(None, _run_sync)
+    return result
+
+
 async def run_nationwide_scraper(
     region: str = "Greater London",
     postcode: str = "",

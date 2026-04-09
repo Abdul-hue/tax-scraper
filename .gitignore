@@ -17,3 +17,7 @@ static/screenshots/
 *.png
 node_modules/
 dist/
+
+*.log
+*proxies.txt
+backend/scrapers/scraper_output/

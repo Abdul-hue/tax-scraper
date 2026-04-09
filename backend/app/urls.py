@@ -8,6 +8,7 @@ from app.scrapers.service import (
     run_tax_scraper,
     run_counciltax_scraper,
     run_parkers_scraper,
+    run_mouseprice_scraper,
     run_nationwide_scraper,
     run_landregistry_scraper,
 )
@@ -84,6 +85,15 @@ async def get_car_valuation(plate: str):
     Get car valuation from Parkers by registration plate.
     """
     result = await run_parkers_scraper(plate=plate)
+    return scraper_response(result)
+
+
+@api_router.get("/scrapers/mouseprice", tags=["scrapers"])
+async def get_mouseprice_valuation(postcode: str):
+    """
+    Get property area valuation from Mouseprice by postcode.
+    """
+    result = await run_mouseprice_scraper(postcode=postcode)
     return scraper_response(result)
 
 

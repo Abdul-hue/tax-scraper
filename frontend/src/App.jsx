@@ -15,6 +15,7 @@ function App() {
 
     const [postcode, setPostcode] = useState('LS278RR')
     const [plate, setPlate] = useState('BD51SMM')
+    const [mousepricePostcode, setMousepricePostcode] = useState('SW1A 1AA')
 
     const [hpiData, setHpiData] = useState({
         locationMode: 'optionRegion', region: 'Greater London', postcode: '',
@@ -141,6 +142,8 @@ function App() {
                     order_title_plan: lrData.order_title_plan.toString(),
                 })
                 endpoint = `/api/scrapers/landregistry?${params.toString()}`
+            } else if (activeTab === 'mouseprice') {
+                endpoint = `/api/scrapers/mouseprice?postcode=${mousepricePostcode}`
             } else if (activeTab === 'idu') {
                 endpoint = `/api/scrapers/idu?${new URLSearchParams(iduData).toString()}`
                 timeout = 300000; // 5 mins for IDU
@@ -267,6 +270,7 @@ function App() {
                     { id: 'taxman', label: 'Listen To Taxman', icon: <Calculator size={18} /> },
                     { id: 'council', label: 'Council Tax', icon: <MapPin size={18} /> },
                     { id: 'parkers', label: 'Parkers', icon: <Car size={18} /> },
+                    { id: 'mouseprice', label: 'Mouseprice', icon: <Home size={18} /> },
                     { id: 'nationwide', label: 'Nationwide HPI', icon: <Home size={18} /> },
                     { id: 'lps', label: 'LPS Valuation', icon: <Building2 size={18} /> },
                     { id: 'landregistry', label: 'Land Registry', icon: <Building2 size={18} /> },
@@ -354,6 +358,13 @@ function App() {
                         <div className="form-group">
                             <label>Car Registration Plate</label>
                             <input type="text" className="input-field" value={plate} onChange={e => setPlate(e.target.value)} placeholder="e.g. BD51 SMM" style={{ textTransform: 'uppercase' }} />
+                        </div>
+                    )}
+
+                    {activeTab === 'mouseprice' && (
+                        <div className="form-group">
+                            <label>Postcode</label>
+                            <input type="text" className="input-field" value={mousepricePostcode} onChange={e => setMousepricePostcode(e.target.value.toUpperCase())} placeholder="e.g. SW1A 1AA" style={{ textTransform: 'uppercase' }} />
                         </div>
                     )}
 
@@ -715,6 +726,51 @@ function App() {
                                         <ScreenshotPreview url={result.screenshot_url} />
 
                                     </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'mouseprice' && (
+                            <div>
+                                {/* FAILURE STATE — amber card for no data / no results / parse error */}
+                                {!result.parse_success && (
+                                    <div style={{ textAlign: 'center', padding: '32px 16px', background: 'rgba(246,185,59,0.06)', border: '1px solid rgba(246,185,59,0.25)', borderRadius: 10, marginBottom: 16 }}>
+                                        <div style={{ fontSize: '3rem', marginBottom: 12 }}>🏚️</div>
+                                        <h3 style={{ color: '#f6b93b', fontWeight: '700', fontSize: '1.15rem', marginBottom: 10 }}>
+                                            No Property Data Found for {result.postcode}
+                                        </h3>
+                                        <p style={{ color: '#c9d1d9', fontSize: '0.875rem', lineHeight: '1.7', maxWidth: 520, margin: '0 auto' }}>
+                                            {result.no_results_reason ||
+                                                'No property sales data was found for this postcode. This usually means it is a non-residential address (e.g. government, royal, or commercial) with no recorded transactions, or the postcode is too new / too rural to have sales history on Mouseprice.'}
+                                        </p>
+                                        {result.url && (
+                                            <a href={result.url} target="_blank" rel="noreferrer"
+                                                style={{ display: 'inline-block', marginTop: 16, fontSize: '0.8rem', color: '#58a6ff' }}>
+                                                View on Mouseprice ↗
+                                            </a>
+                                        )}
+                                    </div>
+                                )}
+
+
+
+                                {/* SUCCESS STATE */}
+                                {result.parse_success && (
+                                    <>
+                                        <table>
+                                            <thead><tr><th>Postcode</th><th>Average Price</th><th>No. of Sales</th><th>Avg £/sqm</th></tr></thead>
+                                            <tbody>
+                                                <tr>
+                                                    <td>{result.postcode}</td>
+                                                    <td style={{ color: '#56d364', fontWeight: 'bold' }}>{result.average_price}</td>
+                                                    <td>{result.number_of_sales}</td>
+                                                    <td>{result.avg_psqm}</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+
+                                        <ScreenshotPreview url={result.screenshot_url} />
+                                    </>
                                 )}
                             </div>
                         )}

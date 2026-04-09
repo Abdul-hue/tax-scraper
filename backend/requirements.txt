@@ -7,3 +7,5 @@ playwright-stealth
 pdfplumber
 requests
 python-dotenv
+fake-useragent
+tenacity
