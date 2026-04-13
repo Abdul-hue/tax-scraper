@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from .models import CouncilTaxQuery, CouncilTaxResult, PropertyRecord
 from ..common.browser import get_browser_args
+from app.core.s3 import upload_screenshot_to_s3_sync
 
 logger = logging.getLogger(__name__)
 
@@ -190,22 +191,14 @@ class CouncilTaxScraper:
                 
                 # Screenshot capture
                 import time as _time
-                from pathlib import Path
-                 
-                 # backend/scrapers/counciltax/scraper.py -> backend/static/screenshots
-                _backend_dir = Path(__file__).parent.parent.parent
-                _ss_dir = _backend_dir / "static" / "screenshots"
-                _ss_dir.mkdir(parents=True, exist_ok=True)
                 _ts = _time.strftime("%Y%m%d_%H%M%S")
-                 
                 _ss_name = f"counciltax_{_ts}.png"
-                _ss_path = str(_ss_dir / _ss_name)
-                
+
                 screenshot_url = None
                 try:
-                    page.screenshot(path=_ss_path, full_page=True)
-                    screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                    logger.info(f"Screenshot saved to: {_ss_path}")
+                    screenshot_bytes = page.screenshot(full_page=True)
+                    screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+                    logger.info("Screenshot uploaded to S3: %s", screenshot_url)
                 except Exception as e:
                     logger.warning(f"Failed to capture screenshot: {e}")
  

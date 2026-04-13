@@ -5,6 +5,7 @@ from playwright.sync_api import sync_playwright
 from .models import NationwideQuery, NationwideResult
 from .parser import parse_results
 from ..common.browser import get_browser_args
+from app.core.s3 import upload_screenshot_to_s3_sync
 
 logger = logging.getLogger(__name__)
 
@@ -116,16 +117,12 @@ class NationwideScraper:
                     parsed.scraped_at = result.scraped_at
 
                     # Screenshot capture
-                    import os, time as _time
-                    from pathlib import Path
-                    _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
-                    _ss_dir.mkdir(parents=True, exist_ok=True)
+                    import time as _time
                     _ts = _time.strftime("%Y%m%d_%H%M%S")
                     _ss_name = f"nationwide_{_ts}.png"
-                    _ss_path = str(_ss_dir / _ss_name)
                     try:
-                        page.screenshot(path=_ss_path, full_page=True)
-                        parsed.screenshot_url = f"/api/files/screenshots/{_ss_name}"
+                        screenshot_bytes = page.screenshot(full_page=True)
+                        parsed.screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
                     except Exception:
                         parsed.screenshot_url = None
 

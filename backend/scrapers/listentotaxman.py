@@ -42,6 +42,7 @@ from typing import Literal, Optional
 from bs4 import BeautifulSoup
 from playwright.sync_api import Page, TimeoutError as PWTimeout, sync_playwright
 from .common.browser import get_browser_args
+from app.core.s3 import upload_screenshot_to_s3_sync
 
 logger = logging.getLogger(__name__)
 
@@ -222,21 +223,13 @@ class ListenToTaxmanScraper:
                 # ── screenshot after real values confirmed ─────────────────────
                 if screenshot:
                     import time as _time
-                    from pathlib import Path
-                    
-                    # BACKEND_DIR is backend/
-                    _backend_dir = Path(__file__).parent.parent
-                    _ss_dir = _backend_dir / "static" / "screenshots"
-                    _ss_dir.mkdir(parents=True, exist_ok=True)
                     _ts = _time.strftime("%Y%m%d_%H%M%S")
-                    
                     _ss_name = f"taxman_{_ts}.png"
-                    _ss_path = str(_ss_dir / _ss_name)
-                    
+
                     try:
-                        self._page.screenshot(path=_ss_path, full_page=True)
-                        result.screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                        logger.info(f"Screenshot saved to: {_ss_path}")
+                        screenshot_bytes = self._page.screenshot(full_page=True)
+                        result.screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+                        logger.info("Screenshot uploaded to S3: %s", result.screenshot_url)
                     except Exception as e:
                         logger.warning(f"Failed to capture screenshot: {e}")
                         result.screenshot_url = None
@@ -656,14 +649,15 @@ class ListenToTaxmanScraper:
     # ── screenshot ────────────────────────────────────────────────────────────
     def _take_screenshot(self, salary: int | str) -> str:
         """
-        Capture the full page (not just the visible viewport) and save as PNG.
-        Returns the absolute path to the saved file.
+        Capture the full page and upload to S3.
+        Returns the public screenshot URL.
         """
         ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = self.output_dir / f"taxman_{salary}_{ts}.png"
-        self._page.screenshot(path=str(path), full_page=True)
-        logger.info("Screenshot saved → %s", path.resolve())
-        return str(path.resolve())
+        name = f"taxman_{salary}_{ts}.png"
+        screenshot_bytes = self._page.screenshot(full_page=True)
+        screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, name)
+        logger.info("Screenshot uploaded to S3 → %s", screenshot_url)
+        return screenshot_url
 
     # ── JSON ──────────────────────────────────────────────────────────────────
     def _save_json(self, result: TaxResult, salary: int | str) -> Path:

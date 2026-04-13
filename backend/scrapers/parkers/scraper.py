@@ -16,6 +16,7 @@ from playwright_stealth import Stealth
 import re
 from .models import ParkersConfig, ParkersResult, ValuationPrices
 from ..common.browser import get_browser_args
+from app.core.s3 import upload_screenshot_to_s3_sync
 
 logger = logging.getLogger(__name__)
 
@@ -345,15 +346,11 @@ class ParkersScraper:
                     page.wait_for_timeout(500)
 
                 import time as _time
-                _backend_dir = Path(__file__).parent.parent.parent
-                _ss_dir = _backend_dir / "static" / "screenshots"
-                _ss_dir.mkdir(parents=True, exist_ok=True)
                 _ts = _time.strftime("%Y%m%d_%H%M%S")
                 _ss_name = f"parkers_{_ts}.png"
-                _ss_path = str(_ss_dir / _ss_name)
-                page.screenshot(path=_ss_path, full_page=False)
-                screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                logger.info(f"Screenshot saved to: {_ss_path}")
+                screenshot_bytes = page.screenshot(full_page=False)
+                screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+                logger.info("Screenshot uploaded to S3: %s", screenshot_url)
 
                 return ParkersResult(
                     plate=plate,
@@ -383,10 +380,8 @@ class ParkersScraper:
 
     def _take_error_screenshot(self, page, name_prefix):
         import time as _time
-        _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
-        _ss_dir.mkdir(parents=True, exist_ok=True)
         _ts = _time.strftime("%Y%m%d_%H%M%S")
         _ss_name = f"{name_prefix}_{_ts}.png"
-        _ss_path = str(_ss_dir / _ss_name)
-        page.screenshot(path=_ss_path, full_page=True)
-        logger.info(f"Error screenshot saved to: {_ss_path}")
+        screenshot_bytes = page.screenshot(full_page=True)
+        screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+        logger.info("Error screenshot uploaded to S3: %s", screenshot_url)

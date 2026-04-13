@@ -7,6 +7,7 @@ import time
 from urllib.parse import urlparse, parse_qs
 
 from playwright.sync_api import sync_playwright, Page, BrowserContext
+from app.core.s3 import upload_screenshot_to_s3_sync
 
 from .models import IDUConfig, IDUResult, PEPEntry
 from . import session as session_mod
@@ -370,21 +371,15 @@ class IDUScraper:
                 html = self.page.content()
                 
                 # Screenshot after results are confirmed loaded
-                import os, time as _time
-                from pathlib import Path
-                _backend_dir = Path(__file__).parent.parent.parent
-                _ss_dir = _backend_dir / "static" / "screenshots"
-                _ss_dir.mkdir(parents=True, exist_ok=True)
-                _ts = _time.strftime("%Y%m%d_%H%M%S")
+                _ts = time.strftime("%Y%m%d_%H%M%S")
                 _ss_name = f"idu_{_ts}.png"
-                _ss_path = str(_ss_dir / _ss_name)
                 screenshot_url = None
                 try:
-                    self.page.screenshot(path=_ss_path, full_page=True)
-                    screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                    logger.info(f"Screenshot saved to: {_ss_path}")
+                    screenshot_bytes = self.page.screenshot(full_page=True)
+                    screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+                    logger.info("Screenshot uploaded to S3: %s", screenshot_url)
                 except Exception as e:
-                    logger.warning(f"Failed to capture screenshot: {e}")
+                    logger.warning("Failed to capture/upload screenshot: %s", e)
 
                 soup = parser_mod.BeautifulSoup(html, "lxml")
 
@@ -436,9 +431,10 @@ class IDUScraper:
             except Exception as exc:  # per-attempt
                 logger.warning("Search attempt %s failed: %s", attempt, exc)
                 try:
-                    fail_ss = f"fail_attempt_{attempt}.png"
-                    self.page.screenshot(path=fail_ss, full_page=True)
-                    logger.info(f"Captured failure screenshot at: {fail_ss}")
+                    fail_ss = f"idu_fail_attempt_{attempt}_{time.strftime('%Y%m%d_%H%M%S')}.png"
+                    fail_bytes = self.page.screenshot(full_page=True)
+                    fail_url = upload_screenshot_to_s3_sync(fail_bytes, fail_ss)
+                    logger.info("Captured failure screenshot to S3: %s", fail_url)
                 except Exception as ss_err:
                     logger.warning(f"Failed to capture error screenshot: {ss_err}")
                 last_exc = exc

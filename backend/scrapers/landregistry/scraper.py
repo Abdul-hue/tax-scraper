@@ -6,6 +6,7 @@ from pathlib import Path
 from scrapers.landregistry.models import LandRegistryQuery, LandRegistryResult
 from scrapers.common.browser import get_browser_args
 from scrapers.landregistry.pdf_parser import parse_pdf
+from app.core.s3 import upload_screenshot_to_s3_sync
 
 logger = logging.getLogger(__name__)
 
@@ -408,15 +409,12 @@ class LandRegistryScraper:
                         result.error = (existing + " | " if existing else "") + f"Title plan PDF download error: {e}"
 
                 # Screenshot
-                _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
-                _ss_dir.mkdir(parents=True, exist_ok=True)
                 _ts = _time.strftime("%Y%m%d_%H%M%S")
                 _ss_name = f"landregistry_{_ts}.png"
-                _ss_path = str(_ss_dir / _ss_name)
                 try:
-                    page.screenshot(path=_ss_path, full_page=True)
-                    result.screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                    logger.info(f"Screenshot saved: {_ss_path}")
+                    screenshot_bytes = page.screenshot(full_page=True)
+                    result.screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+                    logger.info("Screenshot uploaded to S3: %s", result.screenshot_url)
                 except Exception as e:
                     logger.warning(f"Screenshot failed: {e}")
                     result.screenshot_url = None
@@ -431,12 +429,10 @@ class LandRegistryScraper:
     def _take_error_screenshot(self, page, name_prefix: str):
         """Save a debug screenshot when an error occurs."""
         try:
-            _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
-            _ss_dir.mkdir(parents=True, exist_ok=True)
             _ts = _time.strftime("%Y%m%d_%H%M%S")
             _ss_name = f"{name_prefix}_{_ts}.png"
-            _ss_path = str(_ss_dir / _ss_name)
-            page.screenshot(path=_ss_path, full_page=True)
-            logger.info(f"Error screenshot saved: {_ss_path}")
+            screenshot_bytes = page.screenshot(full_page=True)
+            screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+            logger.info("Error screenshot uploaded to S3: %s", screenshot_url)
         except Exception as e:
             logger.warning(f"Could not save error screenshot: {e}")

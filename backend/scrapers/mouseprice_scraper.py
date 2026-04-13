@@ -16,6 +16,7 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log
 )
+from app.core.s3 import upload_screenshot_to_s3_sync
 
 # ── CONFIGURATION & LOGGING ──────────────────────────────────────────────────
 
@@ -228,21 +229,15 @@ class MousePriceScraper:
 
     def _save_screenshot(self, html_file_path: Path, label: str) -> Optional[str]:
         """
-        Render the locally-saved HTML file via Playwright and save as PNG.
+        Render the locally-saved HTML file via Playwright and upload PNG to S3.
         Uses a local file:// URL so Cloudflare is never involved.
-        Returns a relative URL like /static/screenshots/<filename>, or None on failure.
+        Returns a public S3 URL, or None on failure.
         """
         try:
             from playwright.sync_api import sync_playwright
 
-            # Resolve the screenshots directory relative to the backend root
-            # backend/scrapers/mouseprice_scraper.py -> backend/ -> backend/static/screenshots/
-            screenshots_dir = Path(__file__).parent.parent / "static" / "screenshots"
-            screenshots_dir.mkdir(parents=True, exist_ok=True)
-
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             screenshot_name = f"mouseprice_{label}_{timestamp}.png"
-            screenshot_path = screenshots_dir / screenshot_name
 
             # Render the local HTML file (no network, no Cloudflare)
             file_url = html_file_path.resolve().as_uri()
@@ -251,11 +246,12 @@ class MousePriceScraper:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page(viewport={"width": 1280, "height": 900})
                 page.goto(file_url, wait_until="domcontentloaded")
-                page.screenshot(path=str(screenshot_path), full_page=False)
+                screenshot_bytes = page.screenshot(full_page=False)
                 browser.close()
 
-            logger.info(f"Screenshot saved: {screenshot_path}")
-            return f"/static/screenshots/{screenshot_name}"
+            screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, screenshot_name)
+            logger.info("Screenshot uploaded to S3: %s", screenshot_url)
+            return screenshot_url
 
         except Exception as e:
             logger.warning(f"Screenshot failed (non-fatal): {e}")

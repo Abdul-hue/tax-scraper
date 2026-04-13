@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from app.core.s3 import upload_screenshot_to_s3
 
 _executor = ThreadPoolExecutor(max_workers=4)
 
@@ -129,12 +130,17 @@ class ScraperEngine:
         timeout_ms: int = 20_000,
     ):
         self.headless = headless
-        self.output_dir = Path("static/screenshots")
+        self.output_dir = Path(output_dir)
         self.timeout_ms = timeout_ms
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     async def stop(self):
         return None
+
+    def _capture_and_upload_screenshot(self, page, prefix: str) -> Optional[str]:
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"{prefix}_{timestamp}.png"
+        screenshot_bytes = page.screenshot(full_page=True)
+        return asyncio.run(upload_screenshot_to_s3(screenshot_bytes, filename))
 
     # ── ListenToTaxman Implementation (Ported) ───────────────────────────────
     async def scrape_taxman(
@@ -235,19 +241,12 @@ class ScraperEngine:
                 result.payslip = [asdict(r) for r in rows]
                 result.summary = {r.label: asdict(r) for r in rows if r.label}
 
-                # Screenshot capture
-                import os, time as _time
-                from pathlib import Path
-                _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
-                _ss_dir.mkdir(parents=True, exist_ok=True)
-                _ts = _time.strftime("%Y%m%d_%H%M%S")
-                _ss_name = f"taxman_{_ts}.png"
-                _ss_path = str(_ss_dir / _ss_name)
-                try:
-                    page.screenshot(path=_ss_path, full_page=True)
-                    result.screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                except Exception:
-                    result.screenshot_url = None
+                if screenshot:
+                    try:
+                        result.screenshot_url = self._capture_and_upload_screenshot(page, "taxman")
+                    except Exception as e:
+                        logger.error("S3 upload failed for Taxman: %s", e)
+                        result.screenshot_url = None
 
             except Exception as e:
                 logger.error(f"Scrape failed: {e}")
@@ -329,18 +328,10 @@ class ScraperEngine:
 
                 result.properties = [asdict(p) for p in properties]
 
-                # Screenshot capture
-                import os, time as _time
-                from pathlib import Path
-                _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
-                _ss_dir.mkdir(parents=True, exist_ok=True)
-                _ts = _time.strftime("%Y%m%d_%H%M%S")
-                _ss_name = f"counciltax_{_ts}.png"
-                _ss_path = str(_ss_dir / _ss_name)
                 try:
-                    page.screenshot(path=_ss_path, full_page=True)
-                    result.screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                except Exception:
+                    result.screenshot_url = self._capture_and_upload_screenshot(page, "counciltax")
+                except Exception as e:
+                    logger.error("S3 upload failed for Council Tax: %s", e)
                     result.screenshot_url = None
 
                 if not properties:
@@ -471,18 +462,10 @@ class ScraperEngine:
                     if len(parts) >= 3:
                         result.year = parts[-1]
 
-                # Screenshot capture
-                import os, time as _time
-                from pathlib import Path
-                _ss_dir = Path(__file__).parent.parent.parent / "static" / "screenshots"
-                _ss_dir.mkdir(parents=True, exist_ok=True)
-                _ts = _time.strftime("%Y%m%d_%H%M%S")
-                _ss_name = f"parkers_{_ts}.png"
-                _ss_path = str(_ss_dir / _ss_name)
                 try:
-                    page.screenshot(path=_ss_path, full_page=True)
-                    result.screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                except Exception:
+                    result.screenshot_url = self._capture_and_upload_screenshot(page, "parkers")
+                except Exception as e:
+                    logger.error("S3 upload failed for Parkers: %s", e)
                     result.screenshot_url = None
 
             except Exception as e:

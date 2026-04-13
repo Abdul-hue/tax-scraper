@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from playwright.sync_api import sync_playwright
 from .models import LpsQuery, LpsResult, LpsProperty, LpsPropertyDetail
 from ..common.browser import get_browser_args
+from app.core.s3 import upload_screenshot_to_s3_sync
 
 logger = logging.getLogger(__name__)
 
@@ -99,16 +100,9 @@ class LpsScraper:
 
             # Screenshot capture using Playwright
             import time as _time
-            from pathlib import Path
-            
-            # backend/scrapers/lps/scraper.py -> backend/static/screenshots
-            _backend_dir = Path(__file__).parent.parent.parent
-            _ss_dir = _backend_dir / "static" / "screenshots"
-            _ss_dir.mkdir(parents=True, exist_ok=True)
             _ts = _time.strftime("%Y%m%d_%H%M%S")
             _ss_name = f"lps_{_ts}.png"
-            _ss_path = str(_ss_dir / _ss_name)
-            
+
             try:
                 with sync_playwright() as p:
                     browser = p.chromium.launch(
@@ -123,10 +117,10 @@ class LpsScraper:
                     # as a fallback if the specific result URL isn't easily reachable via GET
                     search_url = f"{BASE_URL}/Property/Search"
                     page.goto(search_url, wait_until="networkidle", timeout=30000)
-                    
-                    page.screenshot(path=_ss_path, full_page=True)
-                    result.screenshot_url = f"/api/files/screenshots/{_ss_name}"
-                    logger.info(f"Screenshot saved to: {_ss_path}")
+
+                    screenshot_bytes = page.screenshot(full_page=True)
+                    result.screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+                    logger.info("Screenshot uploaded to S3: %s", result.screenshot_url)
                     browser.close()
             except Exception as e:
                 logger.warning(f"Failed to capture screenshot: {e}")
