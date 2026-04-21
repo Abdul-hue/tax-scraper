@@ -23,7 +23,7 @@ def _build_s3_client():
     )
 
 
-def _upload_screenshot_sync(screenshot_bytes: bytes, filename: str) -> str:
+def _upload_screenshot_sync(screenshot_bytes: bytes, filename: str, content_type: str = "image/png") -> str:
     if not screenshot_bytes:
         raise ValueError("Screenshot bytes cannot be empty.")
     if not filename:
@@ -41,7 +41,8 @@ def _upload_screenshot_sync(screenshot_bytes: bytes, filename: str) -> str:
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
             Body=screenshot_bytes,
-            ContentType="image/png",
+            ContentType=content_type,
+            ContentDisposition="inline",
         )
     except (BotoCoreError, ClientError) as exc:
         logger.exception("Failed to upload screenshot to S3: %s", exc)
@@ -51,14 +52,14 @@ def _upload_screenshot_sync(screenshot_bytes: bytes, filename: str) -> str:
     return f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{encoded_key}"
 
 
-def upload_screenshot_to_s3_sync(screenshot_bytes: bytes, filename: str) -> str:
+def upload_screenshot_to_s3_sync(screenshot_bytes: bytes, filename: str, content_type: str = "image/png") -> str:
     """Synchronous uploader for sync scraper contexts."""
-    return _upload_screenshot_sync(screenshot_bytes, filename)
+    return _upload_screenshot_sync(screenshot_bytes, filename, content_type)
 
 
-async def upload_screenshot_to_s3(screenshot_bytes: bytes, filename: str) -> str:
+async def upload_screenshot_to_s3(screenshot_bytes: bytes, filename: str, content_type: str = "image/png") -> str:
     """
     Upload screenshot bytes directly to S3 and return a public URL.
     This function is async-friendly and performs the boto3 upload in a worker thread.
     """
-    return await asyncio.to_thread(_upload_screenshot_sync, screenshot_bytes, filename)
+    return await asyncio.to_thread(_upload_screenshot_sync, screenshot_bytes, filename, content_type)

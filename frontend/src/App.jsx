@@ -1,11 +1,12 @@
 import React, { useState } from 'react'
 import axios from 'axios'
-import { Calculator, MapPin, Loader2, Camera, ExternalLink, Settings2, Car, Home, Building2, UserCheck } from 'lucide-react'
+import { Calculator, MapPin, Loader2, Camera, ExternalLink, Settings2, Car, Home, Building2, UserCheck, Users, Scale } from 'lucide-react'
 
 function App() {
     const [activeTab, setActiveTab] = useState('taxman')
     const [loading, setLoading] = useState(false)
     const [result, setResult] = useState(null)
+    const [scrapeError, setScrapeError] = useState('')
 
     const [taxData, setTaxData] = useState({
         salary: 3000, period: 'month', tax_year: '2025/26', region: 'UK',
@@ -46,6 +47,89 @@ function App() {
     const [iduSessionId, setIduSessionId] = useState(null)
     const [iduStatus, setIduStatus] = useState('idle') // idle | starting | awaiting_otp | processing | complete | error
     const [otpInput, setOtpInput] = useState('')
+    const [childMaintenanceData, setChildMaintenanceData] = React.useState({
+        role: 'paying',
+        hasBenefits: false,
+        benefits: [],
+        hasIncome: false,
+        income: '',
+        income_frequency: 'monthly',
+        add_parent_names: false,
+        paying_parent_name: 'Parent',
+        receiving_parent_name: 'Parent',
+        other_children_in_home: 'None',
+        receiving_parents: [{
+            children_count: 1,
+            children_names: [''],
+            overnight_stays: 'never'
+        }]
+    })
+
+    const updateChildData = (key, value) => {
+        setChildMaintenanceData(prev => ({ ...prev, [key]: value }))
+    }
+
+    const toggleBenefit = (benefit) => {
+        setChildMaintenanceData(prev => {
+            if (benefit === 'None of these') {
+                return { ...prev, benefits: prev.benefits.includes('None of these') ? [] : ['None of these'] }
+            }
+            const filtered = prev.benefits.filter(b => b !== 'None of these')
+            return {
+                ...prev,
+                benefits: filtered.includes(benefit)
+                    ? filtered.filter(b => b !== benefit)
+                    : [...filtered, benefit]
+            }
+        })
+    }
+
+    const addParent = () => {
+        setChildMaintenanceData(prev => {
+            if (prev.receiving_parents.length >= 9) return prev
+            const newParents = [
+                ...prev.receiving_parents,
+                { children_count: 1, children_names: [''], overnight_stays: 'never' }
+            ]
+            return { ...prev, receiving_parents: newParents }
+        })
+    }
+
+    const removeParent = (parentIdx) => {
+        setChildMaintenanceData(prev => {
+            if (prev.receiving_parents.length === 1) return prev
+            const newParents = prev.receiving_parents.filter((_, idx) => idx !== parentIdx)
+            return { ...prev, receiving_parents: newParents }
+        })
+    }
+
+    const updateParent = (parentIdx, key, value) => {
+        setChildMaintenanceData(prev => ({
+            ...prev,
+            receiving_parents: prev.receiving_parents.map((parent, idx) => {
+                if (idx !== parentIdx) return parent
+                if (key === 'children_count') {
+                    const count = Math.max(1, parseInt(value) || 1)
+                    const names = [...parent.children_names]
+                    while (names.length < count) names.push('')
+                    while (names.length > count) names.pop()
+                    return { ...parent, children_count: count, children_names: names }
+                }
+                return { ...parent, [key]: value }
+            })
+        }))
+    }
+
+    const updateChildName = (parentIdx, nameIdx, value) => {
+        setChildMaintenanceData(prev => ({
+            ...prev,
+            receiving_parents: prev.receiving_parents.map((parent, idx) =>
+                idx === parentIdx
+                    ? { ...parent, children_names: parent.children_names.map((n, ni) => ni === nameIdx ? value : n) }
+                    : parent
+            )
+        }))
+    }
 
     const startPolling = (sessionId) => {
         const interval = setInterval(async () => {
@@ -89,6 +173,7 @@ function App() {
     const handleScrape = async (e) => {
         e.preventDefault()
         setResult(null)
+        setScrapeError('')
 
         if (activeTab === 'idu') {
             setLoading(true)
@@ -110,6 +195,36 @@ function App() {
 
         setLoading(true)
         try {
+            if (activeTab === 'child-maintenance') {
+                const isMultiple = childMaintenanceData.receiving_parents.length > 1;
+                const parentsToSend = childMaintenanceData.receiving_parents;
+
+                const payload = {
+                    role: childMaintenanceData.role,
+                    multiple_receiving_parents: isMultiple,
+                    number_of_receiving_parents: parentsToSend.length,
+                    benefits: childMaintenanceData.hasBenefits ? childMaintenanceData.benefits : [],
+                    income: childMaintenanceData.hasIncome && childMaintenanceData.role === 'paying' ? Number(childMaintenanceData.income || 0) : null,
+                    income_frequency: childMaintenanceData.income_frequency,
+                    add_parent_names: childMaintenanceData.add_parent_names,
+                    paying_parent_name: childMaintenanceData.paying_parent_name,
+                    receiving_parent_name: childMaintenanceData.receiving_parent_name,
+                    other_children_in_home: childMaintenanceData.other_children_in_home,
+                    receiving_parents: parentsToSend.map(parent => ({
+                        children_count: parent.children_count,
+                        children_names: parent.children_names.filter(n => n.trim() !== ''),
+                        overnight_stays: parent.overnight_stays
+                    })),
+                    headless: false // Added for debugging as requested
+                }
+                const response = await axios.post('/api/scrapers/child-maintenance', payload, {
+                    headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache', 'Expires': '0' },
+                    timeout: 120000
+                })
+                setResult(response.data)
+                return
+            }
+
             let endpoint = ''
             let timeout = 120000; // default 2 mins
 
@@ -156,7 +271,7 @@ function App() {
             })
             setResult(response.data)
         } catch (err) {
-            alert("Scraping failed: " + (err.response?.data?.detail || err.message))
+            setScrapeError(err.response?.data?.detail || err.message || 'Scraping failed')
         } finally {
             setLoading(false)
         }
@@ -274,10 +389,11 @@ function App() {
                     { id: 'nationwide', label: 'Nationwide HPI', icon: <Home size={18} /> },
                     { id: 'lps', label: 'LPS Valuation', icon: <Building2 size={18} /> },
                     { id: 'landregistry', label: 'Land Registry', icon: <Building2 size={18} /> },
+                    { id: 'child-maintenance', label: 'Child Maintenance', icon: <Scale size={18} /> },
                     { id: 'idu', label: 'IDU', icon: <UserCheck size={18} /> },
                 ].map(tab => (
                     <button key={tab.id} className={`tab ${activeTab === tab.id ? 'active' : ''}`}
-                        onClick={() => { setActiveTab(tab.id); setResult(null); }}>
+                        onClick={() => { setActiveTab(tab.id); setResult(null); setScrapeError(''); }}>
                         <span style={{ marginRight: 8, verticalAlign: 'middle' }}>{tab.icon}</span>
                         {tab.label}
                     </button>
@@ -513,6 +629,256 @@ function App() {
                         </div>
                     )}
 
+                    {activeTab === 'child-maintenance' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                            {/* SECTION 1 — Basic Info */}
+                            <div style={{ padding: 16, borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                                <p style={{ color: '#58a6ff', fontWeight: '600', marginBottom: 14, fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Section 1 — Basic Info</p>
+                                <div className="form-grid">
+                                    <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                                        <label>Your Role</label>
+                                        <select className="input-field" value={childMaintenanceData.role} onChange={e => {
+                                            updateChildData('role', e.target.value);
+                                            updateChildData('hasBenefits', false);
+                                            updateChildData('benefits', []);
+                                            updateChildData('moreThanOneParent', false);
+                                        }}>
+                                            <option value="paying">I am the Paying Parent</option>
+                                            <option value="receiving">I am the Receiving Parent</option>
+                                        </select>
+                                    </div>
+                                    
+                                    {/* Role Specific */}
+                                    {childMaintenanceData.role !== 'paying' && (
+                                        <div className="form-group" style={{ gridColumn: 'span 2', marginTop: 10 }}>
+                                            <label>Does the other parent get any benefits or State Pension?</label>
+                                            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                                                <button type="button" className="tab" style={{ padding: '7px 18px', background: childMaintenanceData.hasBenefits ? 'var(--gradient)' : 'transparent', color: childMaintenanceData.hasBenefits ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                    onClick={() => updateChildData('hasBenefits', true)}>Yes</button>
+                                                <button type="button" className="tab" style={{ padding: '7px 18px', background: !childMaintenanceData.hasBenefits ? 'var(--gradient)' : 'transparent', color: !childMaintenanceData.hasBenefits ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                    onClick={() => { updateChildData('hasBenefits', false); updateChildData('benefits', []); }}>No</button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Benefits toggle for Paying */}
+                                {childMaintenanceData.role === 'paying' && (
+                                    <div className="form-group" style={{ marginTop: 20 }}>
+                                        <label>Do you get any benefits or State Pension?</label>
+                                        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                                            <button type="button" className="tab" style={{ padding: '7px 18px', background: childMaintenanceData.hasBenefits ? 'var(--gradient)' : 'transparent', color: childMaintenanceData.hasBenefits ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                onClick={() => updateChildData('hasBenefits', true)}>Yes</button>
+                                            <button type="button" className="tab" style={{ padding: '7px 18px', background: !childMaintenanceData.hasBenefits ? 'var(--gradient)' : 'transparent', color: !childMaintenanceData.hasBenefits ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                onClick={() => { updateChildData('hasBenefits', false); updateChildData('benefits', []); }}>No</button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Shared Benefits Selector based on role check yes */}
+                                <div style={{ maxHeight: childMaintenanceData.hasBenefits ? 1200 : 0, opacity: childMaintenanceData.hasBenefits ? 1 : 0, overflow: 'hidden', transition: 'all 0.3s ease' }}>
+                                    <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: '16px 0 8px' }}>Select all that apply:</p>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: '10px 0' }}>
+                                        {[
+                                            'Universal Credit',
+                                            'Armed Forces Compensation Scheme payments',
+                                            'Bereavement Allowance',
+                                            'Carers Allowance/Carers Support Payment',
+                                            'Incapacity Benefit',
+                                            'Income Support',
+                                            'Income-related Employment and Support Allowance',
+                                            'Industrial Injuries Disablement Benefit',
+                                            'Jobseeker’s Allowance – contribution-based',
+                                            'Jobseeker’s Allowance – income-based',
+                                            'Maternity Allowance',
+                                            'Pension Credit',
+                                            'Personal Independence Payment (PIP)',
+                                            'Severe Disablement Allowance',
+                                            'Skillseekers training',
+                                            'State Pension',
+                                            'Training Allowance',
+                                            'War Disablement Pension',
+                                            'War Widow’s, Widower’s or Surviving Civil Partner’s Pension',
+                                            'Widow’s Pension',
+                                            'Widowed Parent’s Allowance',
+                                            'None of these'
+                                        ].map(benefit => (
+                                            <label key={benefit} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontSize: '0.82rem', color: childMaintenanceData.benefits.includes(benefit) ? '#c9d1d9' : 'var(--text-dim)', padding: '6px 8px', borderRadius: 6, background: childMaintenanceData.benefits.includes(benefit) ? 'rgba(88,166,255,0.08)' : 'transparent', transition: 'all 0.15s' }}>
+                                                <input type="checkbox" checked={childMaintenanceData.benefits.includes(benefit)} onChange={() => toggleBenefit(benefit)} style={{ accentColor: '#58a6ff', marginTop: 3 }} />
+                                                <span style={{ lineHeight: 1.3 }}>{benefit}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Income toggle (Paying Only) */}
+                                {childMaintenanceData.role === 'paying' && (
+                                    <>
+                                        <div className="form-group" style={{ marginTop: 20 }}>
+                                            <label>Do you receive any income?</label>
+                                            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                                                <button type="button" className="tab" style={{ padding: '7px 18px', background: childMaintenanceData.hasIncome ? 'var(--gradient)' : 'transparent', color: childMaintenanceData.hasIncome ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                    onClick={() => updateChildData('hasIncome', true)}>Yes</button>
+                                                <button type="button" className="tab" style={{ padding: '7px 18px', background: !childMaintenanceData.hasIncome ? 'var(--gradient)' : 'transparent', color: !childMaintenanceData.hasIncome ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                    onClick={() => updateChildData('hasIncome', false)}>No</button>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ maxHeight: childMaintenanceData.hasIncome ? 160 : 0, opacity: childMaintenanceData.hasIncome ? 1 : 0, overflow: 'hidden', transition: 'all 0.3s ease' }}>
+                                            <div className="form-grid" style={{ marginTop: 12 }}>
+                                                <div className="form-group">
+                                                    <label>Income Amount (£)</label>
+                                                    <input type="number" step="0.01" min="0" className="input-field" value={childMaintenanceData.income}
+                                                        onChange={e => updateChildData('income', e.target.value)} />
+                                                </div>
+                                                <div className="form-group">
+                                                    <label>Income Frequency</label>
+                                                    <select className="input-field" value={childMaintenanceData.income_frequency}
+                                                        onChange={e => updateChildData('income_frequency', e.target.value)}>
+                                                        <option value="weekly">Weekly</option>
+                                                        <option value="monthly">Monthly</option>
+                                                        <option value="yearly">Yearly</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
+                            {/* SECTION 2 — Other Children & Personalisation */}
+                            <div style={{ padding: 16, borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                                <p style={{ color: '#58a6ff', fontWeight: '600', marginBottom: 14, fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Section 2 — House & Settings</p>
+                                
+                                <div className="form-group">
+                                    <label>How many other children live with you? <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(do not include any children you already pay child maintenance for)</span></label>
+                                    <div style={{ display: 'flex', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+                                        {['None', '1', '2', '3 or more'].map(opt => (
+                                            <button key={opt} type="button"
+                                                style={{
+                                                    padding: '8px 20px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)',
+                                                    cursor: 'pointer', fontSize: '0.85rem', fontWeight: '500', transition: 'all 0.15s',
+                                                    background: childMaintenanceData.other_children_in_home === opt ? 'var(--gradient)' : 'transparent',
+                                                    color: childMaintenanceData.other_children_in_home === opt ? '#fff' : 'var(--text-dim)'
+                                                }}
+                                                onClick={() => updateChildData('other_children_in_home', opt)}>
+                                                {opt}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="form-group" style={{ marginTop: 20 }}>
+                                    <label>Add parent names to calculation summary?</label>
+                                    <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                                        <button type="button" className="tab" style={{ padding: '7px 18px', background: childMaintenanceData.add_parent_names ? 'var(--gradient)' : 'transparent', color: childMaintenanceData.add_parent_names ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                            onClick={() => updateChildData('add_parent_names', true)}>Yes</button>
+                                        <button type="button" className="tab" style={{ padding: '7px 18px', background: !childMaintenanceData.add_parent_names ? 'var(--gradient)' : 'transparent', color: !childMaintenanceData.add_parent_names ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                            onClick={() => updateChildData('add_parent_names', false)}>No</button>
+                                    </div>
+                                </div>
+
+                                {childMaintenanceData.add_parent_names && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
+                                        <div className="form-group">
+                                            <label>Your Name</label>
+                                            <input type="text" className="input-field" value={childMaintenanceData.paying_parent_name} 
+                                                onChange={e => updateChildData('paying_parent_name', e.target.value)} />
+                                        </div>
+                                        <div className="form-group">
+                                            <label>Other Parent's Name</label>
+                                            <input type="text" className="input-field" value={childMaintenanceData.receiving_parent_name} 
+                                                onChange={e => updateChildData('receiving_parent_name', e.target.value)} />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* SECTION 3 — Receiving Parents */}
+                            <div style={{ padding: 16, borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                                    <p style={{ color: '#58a6ff', fontWeight: '600', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Section 3 — Receiving Parents</p>
+                                    {(childMaintenanceData.role === 'paying') && (
+                                        <button type="button" className="tab"
+                                            style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', opacity: childMaintenanceData.receiving_parents.length >= 9 ? 0.4 : 1 }}
+                                            onClick={addParent} disabled={childMaintenanceData.receiving_parents.length >= 9}>
+                                            + Add Receiving Parent
+                                        </button>
+                                    )}
+                                </div>
+
+                                {childMaintenanceData.receiving_parents.map((parent, parentIdx) => (
+                                    <div key={parentIdx} style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: 14, marginBottom: 14, background: 'rgba(0,0,0,0.15)', position: 'relative' }}>
+                                        {/* Parent header */}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--gradient)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: '700', color: '#fff' }}>
+                                                    {parentIdx + 1}
+                                                </div>
+                                                <span style={{ fontWeight: '600', color: '#c9d1d9' }}>Receiving Parent {parentIdx + 1}</span>
+                                            </div>
+                                            {(childMaintenanceData.role === 'paying') && (
+                                                <button type="button"
+                                                    style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid rgba(248,81,73,0.3)', background: 'rgba(248,81,73,0.08)', color: '#f85149', cursor: 'pointer', fontSize: '0.8rem', opacity: childMaintenanceData.receiving_parents.length === 1 ? 0.3 : 1 }}
+                                                    onClick={() => removeParent(parentIdx)}
+                                                    disabled={childMaintenanceData.receiving_parents.length === 1}>
+                                                    Remove Parent
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        <div className="form-grid">
+                                            {/* Children count */}
+                                            <div className="form-group">
+                                                <label>Number of Children</label>
+                                                <input type="number" min="1" max="20" className="input-field"
+                                                    value={parent.children_count}
+                                                    onChange={e => updateParent(parentIdx, 'children_count', e.target.value)} />
+                                            </div>
+
+                                            {/* Overnight stays — per parent block */}
+                                            <div className="form-group">
+                                                <label>Overnight Stays (nights/year)</label>
+                                                <select className="input-field" value={parent.overnight_stays}
+                                                    onChange={e => updateParent(parentIdx, 'overnight_stays', e.target.value)}>
+                                                    <option value="never">Never</option>
+                                                    <option value="up-to-52">Up to 1 night a week (fewer than 52 nights a year)</option>
+                                                    <option value="52-103">1 to 2 nights a week (52 to 103 nights a year)</option>
+                                                    <option value="104-155">2 to 3 nights a week (104 to 155 nights a year)</option>
+                                                    <option value="156-174">More than 3 nights a week - but not half the time (156 to 174 nights a year)</option>
+                                                    <option value="175-182">Half the time (175 to 182 nights a year)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        {/* Children names */}
+                                        {parent.children_names.length > 0 && (
+                                            <div style={{ marginTop: 12 }}>
+                                                <label style={{ display: 'block', marginBottom: 8, color: 'var(--text-dim)', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Children's Names</label>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                                    {parent.children_names.map((name, nameIdx) => (
+                                                        <div key={nameIdx} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                            <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem', minWidth: 60 }}>Child {nameIdx + 1}</span>
+                                                            <input
+                                                                type="text" className="input-field"
+                                                                style={{ flex: 1 }}
+                                                                placeholder={`Child ${nameIdx + 1} name (optional)`}
+                                                                value={name}
+                                                                onChange={e => updateChildName(parentIdx, nameIdx, e.target.value)}
+                                                            />
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                        </div>
+                    )}
+
                     <button className="submit-btn" disabled={loading || iduStatus === 'awaiting_otp'}>
                         {loading ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center' }}>
@@ -520,10 +886,11 @@ function App() {
                                 <span>
                                     {iduStatus === 'starting' ? 'Initializing IDU...' : 
                                      iduStatus === 'processing' ? 'Processing Search...' : 
+                                     activeTab === 'child-maintenance' ? 'Running Calculation...' :
                                      'Running Scraper...'}
                                 </span>
                             </div>
-                        ) : 'Run Scraper'}
+                        ) : activeTab === 'child-maintenance' ? 'Run Calculation' : 'Run Scraper'}
                     </button>
                 </form>
 
@@ -554,6 +921,20 @@ function App() {
                                 Submit OTP
                             </button>
                         </div>
+                    </div>
+                )}
+
+                {scrapeError && (
+                    <div style={{
+                        marginTop: 16,
+                        padding: 14,
+                        background: 'rgba(248,81,73,0.1)',
+                        border: '1px solid rgba(248,81,73,0.3)',
+                        borderRadius: 10,
+                        color: '#f85149',
+                        fontSize: '0.9rem'
+                    }}>
+                        {scrapeError}
                     </div>
                 )}
             </div>
@@ -1026,6 +1407,60 @@ function App() {
                                         </table>
                                     </div>
                                 )}
+                                <ScreenshotPreview url={result.screenshot_url} />
+                            </div>
+                        )}
+
+                        {activeTab === 'child-maintenance' && (
+                            <div>
+                                {/* Main result — big highlight card */}
+                                <div style={{ padding: 20, borderRadius: 12, background: 'linear-gradient(135deg, rgba(88,166,255,0.12), rgba(150,70,255,0.08))', border: '1px solid rgba(88,166,255,0.25)', marginBottom: 16, textAlign: 'center' }}>
+                                    <p style={{ color: '#8b949e', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Calculation Result</p>
+                                    <p style={{ color: '#58a6ff', fontWeight: '700', fontSize: '1.6rem', lineHeight: 1.3 }}>{result.result || 'No result returned'}</p>
+                                </div>
+
+                                {result.reason && (
+                                    <div style={{ padding: 16, borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', marginBottom: 14 }}>
+                                        <p style={{ color: '#8b949e', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Breakdown / Reason</p>
+                                        <p style={{ color: '#c9d1d9', lineHeight: 1.7, fontSize: '0.9rem' }}>{result.reason}</p>
+                                    </div>
+                                )}
+
+                                {result.pdf_url && (
+                                    <a 
+                                        href={result.pdf_url} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        className="download-btn"
+                                        style={{ 
+                                            display: 'inline-flex', 
+                                            alignItems: 'center', 
+                                            gap: 8, 
+                                            background: '#1f6feb', 
+                                            color: '#fff', 
+                                            padding: '10px 20px', 
+                                            borderRadius: 8, 
+                                            textDecoration: 'none', 
+                                            fontSize: '0.88rem',
+                                            fontWeight: '600',
+                                            marginBottom: 16,
+                                            transition: 'background 0.2s'
+                                        }}
+                                        onMouseOver={e => e.currentTarget.style.background = '#388bfd'}
+                                        onMouseOut={e => e.currentTarget.style.background = '#1f6feb'}
+                                    >
+                                        📄 Download Calculation PDF
+                                    </a>
+                                )}
+
+                                {/* Error card */}
+                                {result.error && (
+                                    <div style={{ padding: 14, borderRadius: 10, background: 'rgba(248,81,73,0.1)', border: '1px solid rgba(248,81,73,0.3)', color: '#f85149', marginBottom: 14, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                                        <span style={{ fontSize: '1rem' }}>⚠️</span>
+                                        <span style={{ fontSize: '0.88rem', lineHeight: 1.6 }}>{result.error}</span>
+                                    </div>
+                                )}
+
                                 <ScreenshotPreview url={result.screenshot_url} />
                             </div>
                         )}

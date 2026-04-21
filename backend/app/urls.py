@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, HTTPException, Response
+from fastapi import APIRouter, Query, HTTPException, Response, Body
 from fastapi.responses import FileResponse, JSONResponse
 import os
 import json
@@ -11,6 +11,7 @@ from app.scrapers.service import (
     run_mouseprice_scraper,
     run_nationwide_scraper,
     run_landregistry_scraper,
+    run_child_maintenance_scraper,
 )
 
 api_router = APIRouter()
@@ -226,6 +227,26 @@ async def get_idu(
         mobile2=mobile2,
         landline=landline,
         landline2=landline2,
+    )
+    return scraper_response(result)
+
+
+@api_router.post("/scrapers/child-maintenance", tags=["scrapers"])
+async def get_child_maintenance(payload: dict = Body(...)):
+    """
+    Run the GOV.UK child maintenance calculator scraper.
+    """
+    result = await run_child_maintenance_scraper(
+        role=payload.get("role", "paying"),
+        benefits=payload.get("benefits", []),
+        income=payload.get("income", 0),
+        income_frequency=payload.get("income_frequency", "monthly"),
+        add_parent_names=payload.get("add_parent_names", False),
+        paying_parent_name=payload.get("paying_parent_name", "Parent"),
+        receiving_parent_name=payload.get("receiving_parent_name", "Parent"),
+        other_children_in_home=payload.get("other_children_in_home", 0),
+        receiving_parents=payload.get("receiving_parents", []),
+        headless=payload.get("headless", True)
     )
     return scraper_response(result)
 

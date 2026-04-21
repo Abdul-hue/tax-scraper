@@ -50,7 +50,8 @@ class IDUScraper:
         from dotenv import load_dotenv
         load_dotenv()
         if headless is None:
-            env_val = os.getenv("HEADLESS", "True").lower()
+            # Check for IDU-specific headless setting first, then global
+            env_val = os.getenv("IDU_HEADLESS", os.getenv("HEADLESS", "True")).lower()
             self.headless = (env_val == "true")
         else:
             self.headless = headless
@@ -359,27 +360,136 @@ class IDUScraper:
                         error = None
                     )
                 
-                # FIX: Ensure all dynamic result sections are fully loaded
+                # Ensure all dynamic result sections are fully loaded
                 try:
                     self.page.wait_for_load_state("networkidle", timeout=15000)
                 except Exception:
                     logger.debug("Network did not go idle after results, proceeding anyway")
-                
+
                 # Safety buffer for dynamic components
                 self.page.wait_for_timeout(2000)
-                
+
+                # ── Step 1: Set viewport large for full capture ──────────────────
+                self.page.set_viewport_size({"width": 1440, "height": 900})
+
+                # ── Step 2: Try "Open All" button — most reliable expansion path ─
+                try:
+                    open_all = self.page.locator('input[value="Open All"]').first
+                    if open_all.is_visible(timeout=3000):
+                        open_all.click()
+                        self.page.wait_for_timeout(2500)
+                        logger.info("IDU: Clicked 'Open All' — all sections expanded")
+                    else:
+                        raise Exception("Open All button not visible")
+                except Exception as e:
+                    logger.warning(f"IDU: 'Open All' not found, falling back to per-heading: {e}")
+
+                    # ── Step 3: Fallback — click each collapsed section heading ───
+                    # A section is collapsed when its .icon-collapsed span is visible.
+                    # The click target is the .res-profile-heading.hide-show-trigger element.
+                    try:
+                        collapsed_headings = self.page.locator(
+                            '.res-profile-heading.hide-show-trigger'
+                        ).all()
+
+                        for heading in collapsed_headings:
+                            try:
+                                collapsed_icon = heading.locator('.icon-collapsed')
+                                if collapsed_icon.is_visible(timeout=500):
+                                    heading.click()
+                                    self.page.wait_for_timeout(400)
+                                    logger.info(
+                                        "IDU: Expanded section: %s",
+                                        heading.inner_text()[:40].strip()
+                                    )
+                            except Exception:
+                                pass
+
+                        self.page.wait_for_timeout(1500)
+                    except Exception as e2:
+                        logger.warning(f"IDU: Per-heading fallback expansion failed: {e2}")
+
+                # ── Step 4: Force PEP & Sanction open using confirmed IDs ────────
+                # Confirmed selectors from live page HTML:
+                #   heading: #res-sanction-profile-heading
+                #   body:    #res-sanction-body
+                #   collapsed state: .icon-collapsed visible inside heading
+                try:
+                    pep_heading = self.page.locator('#res-sanction-profile-heading')
+                    pep_body = self.page.locator('#res-sanction-body')
+
+                    pep_collapsed = pep_heading.locator('.icon-collapsed')
+                    if pep_collapsed.is_visible(timeout=2000):
+                        pep_heading.click()
+                        self.page.wait_for_timeout(1000)
+                        logger.info("IDU: PEP & Sanction section force-opened via #res-sanction-profile-heading")
+
+                    pep_body.wait_for(state='visible', timeout=5000)
+                    logger.info("IDU: PEP & Sanction body (#res-sanction-body) confirmed visible")
+                except Exception as e:
+                    logger.warning(f"IDU: PEP & Sanction section check failed: {e}")
+
+                # ── Step 5: Incremental scroll to trigger all lazy-rendered content
+                try:
+                    self.page.evaluate("""
+                        () => {
+                            return new Promise((resolve) => {
+                                let totalHeight = 0;
+                                const distance = 500;
+                                const timer = setInterval(() => {
+                                    window.scrollBy(0, distance);
+                                    totalHeight += distance;
+                                    if (totalHeight >= document.body.scrollHeight) {
+                                        clearInterval(timer);
+                                        resolve();
+                                    }
+                                }, 100);
+                            });
+                        }
+                    """)
+                    self.page.wait_for_timeout(1000)
+                    # Scroll back to top for a clean full-page screenshot
+                    self.page.evaluate("window.scrollTo(0, 0)")
+                    self.page.wait_for_timeout(500)
+                    logger.info("IDU: Incremental scroll complete — all content triggered")
+                except Exception as e:
+                    logger.warning(f"IDU: Scroll sequence failed: {e}")
+
+                # Capture HTML *after* all sections are expanded
                 html = self.page.content()
-                
-                # Screenshot after results are confirmed loaded
+
+                # ── Step 6: Full-page screenshot ─────────────────────────────────
                 _ts = time.strftime("%Y%m%d_%H%M%S")
                 _ss_name = f"idu_{_ts}.png"
                 screenshot_url = None
+                screenshot_bytes = None
                 try:
-                    screenshot_bytes = self.page.screenshot(full_page=True)
-                    screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
-                    logger.info("Screenshot uploaded to S3: %s", screenshot_url)
+                    screenshot_bytes = self.page.screenshot(
+                        full_page=True,
+                        type='png',
+                    )
+                    logger.info(
+                        "IDU: Full-page screenshot captured (%d bytes)",
+                        len(screenshot_bytes),
+                    )
                 except Exception as e:
-                    logger.warning("Failed to capture/upload screenshot: %s", e)
+                    logger.warning(
+                        f"IDU: full_page screenshot failed ({e}), trying tall clip fallback"
+                    )
+                    try:
+                        screenshot_bytes = self.page.screenshot(
+                            clip={"x": 0, "y": 0, "width": 1440, "height": 20000},
+                            type='png',
+                        )
+                    except Exception as e2:
+                        logger.warning(f"IDU: Clip fallback also failed: {e2}")
+
+                if screenshot_bytes:
+                    try:
+                        screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
+                        logger.info("IDU: Screenshot uploaded to S3: %s", screenshot_url)
+                    except Exception as e:
+                        logger.warning("IDU: S3 upload failed: %s", e)
 
                 soup = parser_mod.BeautifulSoup(html, "lxml")
 

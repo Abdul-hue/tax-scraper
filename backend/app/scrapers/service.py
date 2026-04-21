@@ -70,7 +70,7 @@ def _run_idu_task(user: str, pwd: str, task_fn):
     # We use a lock mainly to prevent two threads from trying to 
     # update the session file simultaneously if it ever expires.
     with _idu_operation_lock:
-        scraper = IDUScraper(username=username, password=password, headless=True)
+        scraper = IDUScraper(username=username, password=password, headless=None)
         try:
             return task_fn(scraper)
         finally:
@@ -319,6 +319,91 @@ async def run_landregistry_scraper(
             "register_data": {},
             "title_plan_data": {}
         }
+
+
+async def run_child_maintenance_scraper(
+    role: str,
+    benefits: list[str],
+    income: float,
+    income_frequency: str,
+    add_parent_names: bool,
+    paying_parent_name: str,
+    receiving_parent_name: str,
+    other_children_in_home,  # str ("None","1","2","3 or more") or int
+    receiving_parents: list[dict],
+    headless: bool = True
+):
+    """
+    Service function to bootstrap the GOV.UK child maintenance scraper.
+
+    Accepts the new frontend payload shape where each receiving parent has:
+        { children_count: int, children_names: [str, ...], overnight_stays: str }
+    Also supports the legacy shape: { children: [{name, overnight_stays}, ...] }
+    """
+    from scrapers.child_maintenance.models import (
+        ChildMaintenanceQuery,
+        ReceivingParent,
+        ChildOvernightStay,
+    )
+    from scrapers.child_maintenance.scraper import ChildMaintenanceScraper
+
+    parsed_receiving_parents = []
+    for parent in receiving_parents or []:
+        children: list[ChildOvernightStay] = []
+
+        # ── NEW shape: { children_count, children_names, overnight_stays } ──
+        if "children_count" in parent or "children_names" in parent:
+            count = max(1, int(parent.get("children_count") or 1))
+            names: list[str] = list(parent.get("children_names") or [])
+            # Pad with placeholders if names list is shorter than count
+            while len(names) < count:
+                names.append(f"Child {len(names) + 1}")
+            # Use parent-level overnight_stays for every child
+            overnight = parent.get("overnight_stays", "never") or "never"
+            for name in names[:count]:
+                children.append(
+                    ChildOvernightStay(
+                        name=name.strip() or f"Child {len(children) + 1}",
+                        overnight_stays=overnight,
+                    )
+                )
+
+        # ── LEGACY shape: { children: [{name, overnight_stays}, ...] } ──
+        else:
+            for child in parent.get("children", []):
+                children.append(
+                    ChildOvernightStay(
+                        name=child.get("name", ""),
+                        overnight_stays=child.get("overnight_stays", "never"),
+                    )
+                )
+
+        # Ensure at least one child entry
+        if not children:
+            children.append(ChildOvernightStay(name="Child 1", overnight_stays="never"))
+
+        parsed_receiving_parents.append(ReceivingParent(children=children))
+
+    query = ChildMaintenanceQuery(
+        role=role,
+        benefits=benefits or [],
+        income=float(income or 0),
+        income_frequency=income_frequency,
+        add_parent_names=add_parent_names,
+        paying_parent_name=paying_parent_name,
+        receiving_parent_name=receiving_parent_name,
+        other_children_in_home=other_children_in_home,  # passed as-is; scraper normalises
+        receiving_parents=parsed_receiving_parents,
+    )
+
+    loop = asyncio.get_running_loop()
+
+    def _run_sync():
+        with ChildMaintenanceScraper(headless=headless) as scraper:
+            return scraper.scrape(query)
+
+    result = await loop.run_in_executor(None, _run_sync)
+    return result.to_dict() if hasattr(result, "to_dict") else result
 
 
 async def run_idu_scraper_start(
