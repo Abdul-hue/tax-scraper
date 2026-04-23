@@ -238,12 +238,14 @@ async def get_child_maintenance(payload: dict = Body(...)):
     """
     result = await run_child_maintenance_scraper(
         role=payload.get("role", "paying"),
+        multiple_receiving_parents=payload.get("multiple_receiving_parents", False),
         benefits=payload.get("benefits", []),
         income=payload.get("income", 0),
         income_frequency=payload.get("income_frequency", "monthly"),
         add_parent_names=payload.get("add_parent_names", False),
         paying_parent_name=payload.get("paying_parent_name", "Parent"),
         receiving_parent_name=payload.get("receiving_parent_name", "Parent"),
+        child_name=payload.get("child_name", "Child"),
         other_children_in_home=payload.get("other_children_in_home", 0),
         receiving_parents=payload.get("receiving_parents", []),
         headless=payload.get("headless", True)

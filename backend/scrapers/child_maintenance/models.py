@@ -18,12 +18,14 @@ class ReceivingParent:
 @dataclass
 class ChildMaintenanceQuery:
     role: str = "paying"
+    multiple_receiving_parents: bool = False
     benefits: list[str] = field(default_factory=list)
     income: float = 0.0
     income_frequency: str = "monthly"
     add_parent_names: bool = False
     paying_parent_name: str = "Parent"
     receiving_parent_name: str = "Parent"
+    child_name: str = "Child"
     other_children_in_home: int = 0
     receiving_parents: list[ReceivingParent] = field(default_factory=list)
 

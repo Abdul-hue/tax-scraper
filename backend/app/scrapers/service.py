@@ -143,7 +143,8 @@ async def run_tax_scraper(
             blind=blind,
             no_ni=no_ni,
         )
-        with ListenToTaxmanScraper(headless=True) as scraper:
+        headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
+        with ListenToTaxmanScraper(headless=headless_mode) as scraper:
             return scraper.scrape(config, screenshot=True)
 
     result = await loop.run_in_executor(None, _run_sync)
@@ -173,7 +174,8 @@ async def run_parkers_scraper(plate: str):
     loop = asyncio.get_running_loop()
 
     def _run_sync():
-        scraper = ParkersScraper(headless=True)
+        headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
+        scraper = ParkersScraper(headless=headless_mode)
         return scraper.valuate_by_reg(plate)
 
     result = await loop.run_in_executor(None, _run_sync)
@@ -190,7 +192,8 @@ async def run_mouseprice_scraper(postcode: str):
     loop = asyncio.get_running_loop()
 
     def _run_sync():
-        scraper = MousePriceScraper()
+        headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
+        scraper = MousePriceScraper(headless=headless_mode)
         return scraper.scrape_postcode(postcode)
 
     result = await loop.run_in_executor(None, _run_sync)
@@ -222,7 +225,8 @@ async def run_nationwide_scraper(
     loop = asyncio.get_running_loop()
 
     def _run_sync():
-        with NationwideScraper(headless=True) as scraper:
+        headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
+        with NationwideScraper(headless=headless_mode) as scraper:
             return scraper.scrape(query)
 
     result = await loop.run_in_executor(None, _run_sync)
@@ -323,12 +327,14 @@ async def run_landregistry_scraper(
 
 async def run_child_maintenance_scraper(
     role: str,
+    multiple_receiving_parents: bool,
     benefits: list[str],
     income: float,
     income_frequency: str,
     add_parent_names: bool,
     paying_parent_name: str,
     receiving_parent_name: str,
+    child_name: str,
     other_children_in_home,  # str ("None","1","2","3 or more") or int
     receiving_parents: list[dict],
     headless: bool = True
@@ -360,10 +366,16 @@ async def run_child_maintenance_scraper(
                 names.append(f"Child {len(names) + 1}")
             # Use parent-level overnight_stays for every child
             overnight = parent.get("overnight_stays", "never") or "never"
-            for name in names[:count]:
+            for j, name in enumerate(names[:count]):
+                clean_name = name.strip()
+                if not clean_name and j == 0 and child_name:
+                    clean_name = child_name.strip()
+                if not clean_name:
+                    clean_name = f"Child {j + 1}"
+                    
                 children.append(
                     ChildOvernightStay(
-                        name=name.strip() or f"Child {len(children) + 1}",
+                        name=clean_name,
                         overnight_stays=overnight,
                     )
                 )
@@ -386,12 +398,14 @@ async def run_child_maintenance_scraper(
 
     query = ChildMaintenanceQuery(
         role=role,
+        multiple_receiving_parents=multiple_receiving_parents,
         benefits=benefits or [],
         income=float(income or 0),
         income_frequency=income_frequency,
         add_parent_names=add_parent_names,
         paying_parent_name=paying_parent_name,
         receiving_parent_name=receiving_parent_name,
+        child_name=child_name,
         other_children_in_home=other_children_in_home,  # passed as-is; scraper normalises
         receiving_parents=parsed_receiving_parents,
     )

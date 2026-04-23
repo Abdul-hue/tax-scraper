@@ -111,6 +111,7 @@ class ChildMaintenanceScraper:
     # ─────────────────────────────────────────────────────────────────
 
     def _normalize_query(self, query: ChildMaintenanceQuery) -> ChildMaintenanceQuery:
+        logger.info(f"Normalization Input: {query}")
         role = (query.role or "paying").strip().lower()
         if role not in {"paying", "receiving"}:
             raise ValueError("role must be 'paying' or 'receiving'")
@@ -138,6 +139,7 @@ class ChildMaintenanceScraper:
             children_count = int(get_val(p, "children_count", 0))
             children_names = get_val(p, "children_names", [])
             overnight_stays = (get_val(p, "overnight_stays", "never") or "never").strip().lower()
+            logger.debug(f"Normalizing parent {i+1}: children_count={children_count}, names={children_names}, overnight={overnight_stays}")
             
             # Try old nested list field
             nested_children = get_val(p, "children", [])
@@ -146,11 +148,13 @@ class ChildMaintenanceScraper:
 
             # 1. Prefer old nested children list if populated
             if nested_children:
-                for c in nested_children:
+                for j, c in enumerate(nested_children):
                     c_name = (get_val(c, "name", "") or "").strip()
                     c_stay = (get_val(c, "overnight_stays", "never") or "never").strip().lower()
                     if c_stay not in OVERNIGHT_LABELS:
                         c_stay = "never"
+                    if not c_name and j == 0 and getattr(query, "child_name", ""):
+                        c_name = str(query.child_name).strip()
                     children.append(
                         ChildOvernightStay(
                             name=c_name or f"Child {len(children) + 1}",
@@ -164,6 +168,8 @@ class ChildMaintenanceScraper:
                     name = ""
                     if j < len(children_names):
                         name = str(children_names[j]).strip()
+                    if not name and j == 0 and getattr(query, "child_name", ""):
+                        name = str(query.child_name).strip()
                     if not name:
                         name = f"Child {j + 1}"
                     
@@ -203,12 +209,14 @@ class ChildMaintenanceScraper:
 
         return ChildMaintenanceQuery(
             role=role,
+            multiple_receiving_parents=bool(getattr(query, "multiple_receiving_parents", False)),
             benefits=accepted,
             income=float(query.income or 0.0),
             income_frequency=frequency,
             add_parent_names=bool(getattr(query, "add_parent_names", False)),
             paying_parent_name=str(getattr(query, "paying_parent_name", "") or "Parent").strip(),
             receiving_parent_name=str(getattr(query, "receiving_parent_name", "") or "Parent").strip(),
+            child_name=str(getattr(query, "child_name", "") or "Child").strip(),
             other_children_in_home=oic_label,  # now "None", "1", "2", or "3 or more"
             receiving_parents=clean_parents,
         )
@@ -243,6 +251,7 @@ class ChildMaintenanceScraper:
                 # Loop until we reach the final calculation page
                 _last_url = ""
                 _loop_count = 0
+                personalisation_child_idx = 0
                 while True:
                     page.wait_for_load_state("domcontentloaded", timeout=60000)
                     page.wait_for_timeout(1000)
@@ -279,8 +288,7 @@ class ChildMaintenanceScraper:
                         
                     # 2. More than one parent (Paying)
                     if "payments-to-more-than-one" in url or "more than one other parent" in heading:
-                        parent_count = len(query.receiving_parents)
-                        self._answer_yes_no(page, "will-you-be-making-payments", parent_count > 1)
+                        self._answer_yes_no(page, "will-you-be-making-payments", query.multiple_receiving_parents)
                         continue
                         
                     # 2a. How many people will you be paying (Paying)
@@ -292,15 +300,16 @@ class ChildMaintenanceScraper:
                             self._continue(page)
                         continue
                         
-                    # 3. Benefits (Paying & Receiving)
-                    # "do you get any benefits" or "does the other parent get any benefits"
-                    if "get-any-benefits" in url or "benefits or state pension" in heading:
+                    # 3. Benefits Gate (Yes/No)
+                    # This page asks "Do you get any benefits?" before showing the list.
+                    if ("get-any-benefits" in url or "get any benefits" in heading) and "of these" not in heading and "which" not in heading:
                         has_benefits = len(query.benefits) > 0
                         self._answer_yes_no(page, "benefits", has_benefits)
                         continue
                         
-                    # 3a. Benefits Multi-Checkbox
-                    if "which-benefits" in url or "which benefits" in heading:
+                    # 3a. Benefits Multi-Checkbox List
+                    # This page asks "Do you get any of these benefits..." and has a list of checkboxes.
+                    if "which-benefits" in url or "which benefits" in heading or "any of these benefits" in heading or "state pension" in heading:
                         self._select_benefits(page, query.benefits)
                         continue
                         
@@ -356,7 +365,7 @@ class ChildMaintenanceScraper:
                     if "what-are-the-names" in url or "names of your children" in heading or "name of child" in heading:
                         logger.info("Names page detected.")
                         all_children = [c for p in query.receiving_parents for c in p.children]
-                        self._fill_all_child_names(page, all_children)
+                        self._fill_all_child_names(page, all_children, query)
                         continue
                         
                     # 7. Do any children stay overnight? (gate)
@@ -427,33 +436,111 @@ class ChildMaintenanceScraper:
 
                     # 11a. "What is your name?" — paying parent name
                     if "parent-name" in url and "your name" in heading:
-                        name = str(getattr(query, "paying_parent_name", "") or "Parent").strip()
+                        name = str(getattr(query, "paying_parent_name", "") or "Alex").strip()
                         logger.info(f"Entering paying parent name: {name}")
-                        inp = page.locator("input[name='name'], input#f-name").first
-                        if inp.count() > 0:
+                        
+                        selectors = ["input[name='name']", "input#f-name", "input.govuk-input", "input[type='text']"]
+                        inp = None
+                        for selector in selectors:
+                            loc = page.locator(selector).first
+                            if loc.count() > 0 and loc.is_visible():
+                                inp = loc
+                                break
+                        
+                        if inp:
                             inp.fill(name)
+                            # Verify fill
+                            if inp.input_value() != name:
+                                logger.warning("Fill failed or partially failed, trying type...")
+                                inp.click()
+                                page.keyboard.press("Control+A")
+                                page.keyboard.press("Backspace")
+                                inp.type(name)
+                            page.wait_for_timeout(500)
+                        else:
+                            logger.error("Could not find paying parent name input field!")
+                            
                         self._continue(page)
                         continue
 
                     # 11b. "What is the other parent's name?" — receiving parent name
                     if ("other-parent" in url or "other parent" in heading) and "name" in heading:
-                        name = str(getattr(query, "receiving_parent_name", "") or "Parent").strip()
+                        name = str(getattr(query, "receiving_parent_name", "") or "Sam").strip()
                         logger.info(f"Entering receiving parent name: {name}")
-                        inp = page.locator("input[name='name']").first
-                        if inp.count() > 0:
+                        
+                        selectors = ["input[name='name']", "input#f-name", "input.govuk-input", "input[type='text']"]
+                        inp = None
+                        for selector in selectors:
+                            loc = page.locator(selector).first
+                            if loc.count() > 0 and loc.is_visible():
+                                inp = loc
+                                break
+                        
+                        if inp:
                             inp.fill(name)
+                            # Verify fill
+                            if inp.input_value() != name:
+                                logger.warning("Fill failed or partially failed, trying type...")
+                                inp.click()
+                                page.keyboard.press("Control+A")
+                                page.keyboard.press("Backspace")
+                                inp.type(name)
+                            page.wait_for_timeout(500)
+                        else:
+                            logger.error("Could not find receiving parent name input field!")
+
                         self._continue(page)
                         continue
 
                     # 11c. "What is your child's name?" — per child name (personalisation flow)
                     if "child-name" in url or ("child" in url and "name" in heading and "personalisation" in url):
-                        all_children = [c for p in query.receiving_parents for c in p.children]
-                        name = all_children[0].name if all_children else "Child"
-                        logger.info(f"Entering child name (personalisation): {name}")
-                        inp = page.locator("input[name='name']").first
-                        if inp.count() > 0:
+                        all_children = []
+                        for p in query.receiving_parents:
+                            for c in p.children:
+                                all_children.append(c)
+                        
+                        if personalisation_child_idx == 0 and getattr(query, "child_name", ""):
+                            name = query.child_name
+                        elif personalisation_child_idx < len(all_children):
+                            name = all_children[personalisation_child_idx].name
+                        else:
+                            name = f"Child {personalisation_child_idx + 1}"
+                            
+                        logger.info(f"Entering child name {personalisation_child_idx + 1} (personalisation): {name}")
+                        
+                        # Robust input selection
+                        selectors = ["input[name='name']", "input#f-name", "input.govuk-input", "input[type='text']"]
+                        inp = None
+                        for selector in selectors:
+                            loc = page.locator(selector).first
+                            if loc.count() > 0 and loc.is_visible():
+                                inp = loc
+                                break
+                        
+                        if inp:
                             inp.fill(name)
+                            # Verify fill
+                            if inp.input_value() != name:
+                                logger.warning("Fill failed or partially failed, trying type...")
+                                inp.click()
+                                page.keyboard.press("Control+A")
+                                page.keyboard.press("Backspace")
+                                inp.type(name)
+                            page.wait_for_timeout(500)
+                        else:
+                            logger.error("Could not find child name input field!")
+                        
+                        prev_url = page.url
                         self._continue(page)
+                        
+                        # Only increment index if we actually moved away from this page
+                        # (Wait a bit for navigation)
+                        try:
+                            page.wait_for_url(lambda u: u != prev_url, timeout=3000)
+                            personalisation_child_idx += 1
+                        except:
+                            logger.warning("URL did not change after entering child name. May be a validation error or multi-step same-URL form.")
+                        
                         continue
                         
                     # Fallback
@@ -559,20 +646,23 @@ class ChildMaintenanceScraper:
     # ─────────────────────────────────────────────────────────────────
 
     def _click_radio_by_value(self, page, value: str) -> bool:
-        """
-        Click a GOV.UK radio button by its input value.
-        GOV.UK hides the actual <input> with opacity:0 — must click the <label>.
-        """
         radio = page.locator(f"input[type='radio'][value='{value}']").first
         if radio.count() == 0:
             return False
         input_id = radio.get_attribute("id")
         label = page.locator(f"label[for='{input_id}']").first
         if label.count() > 0:
-            label.click()
+            try:
+                label.click(timeout=2000)
+            except:
+                logger.warning(f"Regular click failed on radio label for '{value}', using dispatch_event")
+                label.dispatch_event("click")
             return True
-        # fallback to clicking label text
-        return self._click_label(page, value)
+        
+        # fallback to clicking label text (e.g. "Yes", "No")
+        capitalized = value.capitalize()
+        logger.info(f"Radio value '{value}' not found by selector, trying label text '{capitalized}'")
+        return self._click_label(page, capitalized)
 
     def _accept_cookies_if_present(self, page):
         for selector in [
@@ -599,8 +689,35 @@ class ChildMaintenanceScraper:
 
     def _continue(self, page):
         """Click the submit/continue button and wait for next page."""
-        submit = page.locator("button[type='submit'], input[type='submit']").first
-        submit.click()
+        # Try multiple common selectors for the continue button
+        selectors = [
+            "button[type='submit']",
+            "input[type='submit']",
+            "button:has-text('Continue')",
+            ".govuk-button:has-text('Continue')",
+            "a.govuk-button:has-text('Continue')",
+            "button.govuk-button",
+            "input.govuk-button"
+        ]
+        
+        btn = None
+        for sel in selectors:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                btn = loc
+                break
+        
+        if btn:
+            try:
+                btn.click(timeout=5000)
+            except Exception as e:
+                logger.warning(f"Regular click failed on continue button ({e}), trying dispatch_event...")
+                btn.dispatch_event("click")
+        else:
+            # Last resort fallback
+            logger.warning("No continue button found by specific selectors, trying generic button click...")
+            page.locator("button.govuk-button, input.govuk-button").first.dispatch_event("click")
+
         page.wait_for_timeout(1000)  # Wait for navigation to trigger
         page.wait_for_load_state("domcontentloaded", timeout=60000)
         # Wait for any heading to appear to ensure new page content is loaded
@@ -617,6 +734,7 @@ class ChildMaintenanceScraper:
                 "Question page mismatch. expected=%s, got=%s", slug_hint, self._current_slug(page)
             )
         val = "yes" if yes else "no"
+        logger.info(f"Answering Yes/No for '{slug_hint}': {val} (bool={yes})")
         self._click_radio_by_value(page, val)
         self._continue(page)
 
@@ -645,13 +763,25 @@ class ChildMaintenanceScraper:
                 self._click_label(page, "Yes")
                 self._continue(page)
 
-        for benefit in benefits:
-            if not self._click_label(page, benefit):
-                labels = [t.strip() for t in page.locator("label").all_inner_texts() if t.strip()]
-                raise RuntimeError(
-                    f"Could not locate benefit option: '{benefit}'. "
-                    f"url={page.url} labels={labels[:14]}"
-                )
+        if not benefits:
+            # If no benefits provided, we must select "None of these" to continue
+            none_labels = ["None of these", "None of the above", "No, I do not get any of these"]
+            found_none = False
+            for nl in none_labels:
+                if self._click_label(page, nl):
+                    found_none = True
+                    break
+            
+            if not found_none:
+                logger.warning("Could not find a 'None of these' option on the benefits page.")
+        else:
+            for benefit in benefits:
+                if not self._click_label(page, benefit):
+                    labels = [t.strip() for t in page.locator("label").all_inner_texts() if t.strip()]
+                    raise RuntimeError(
+                        f"Could not locate benefit option: '{benefit}'. "
+                        f"url={page.url} labels={labels[:14]}"
+                    )
         self._continue(page)
 
     def _normalize_text(self, text: str) -> str:
@@ -692,13 +822,13 @@ class ChildMaintenanceScraper:
         self._click_radio_by_value(page, frequency)
         self._continue(page)
 
-    def _fill_all_child_names(self, page, children: list[ChildOvernightStay]):
+    def _fill_all_child_names(self, page, children: list[ChildOvernightStay], query: ChildMaintenanceQuery = None):
         """
-        Fill the GOV.UK names page(s).
-        Handles both a single page with multiple inputs and a series of pages (one per child).
+        Fill children's names on the dedicated names page.
+        Supports both a single page with multiple inputs and sequential one-name-per-page flows.
         """
-        page.wait_for_load_state("domcontentloaded", timeout=30000)
-        page.wait_for_timeout(1000)
+        selector = "input[type='text'], input.govuk-input"
+        page.wait_for_selector(selector, state="visible", timeout=15000)
 
         selector = "input[type='text']:visible, input[type='search']:visible, input:not([type]):visible"
         
@@ -714,7 +844,10 @@ class ChildMaintenanceScraper:
         if input_count > 1:
             # Case 1: Multiple inputs on one page
             for i in range(input_count):
-                name = children[i].name if i < len(children) else f"Child {i + 1}"
+                if i == 0 and getattr(query, "child_name", ""):
+                    name = query.child_name
+                else:
+                    name = children[i].name if i < len(children) else f"Child {i + 1}"
                 inputs.nth(i).fill(name)
             self._continue(page)
         elif input_count == 1:
@@ -724,7 +857,10 @@ class ChildMaintenanceScraper:
                 page.wait_for_selector(selector, state="visible", timeout=10000)
                 inp = page.locator(selector).first
                 
-                name = children[i].name if i < len(children) else f"Child {i + 1}"
+                if i == 0 and getattr(query, "child_name", ""):
+                    name = query.child_name
+                else:
+                    name = children[i].name if i < len(children) else f"Child {i + 1}"
                 inp.fill(name)
                 self._continue(page)
                 

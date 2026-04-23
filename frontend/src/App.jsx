@@ -55,8 +55,10 @@ function App() {
         income: '',
         income_frequency: 'monthly',
         add_parent_names: false,
-        paying_parent_name: 'Parent',
-        receiving_parent_name: 'Parent',
+        paying_parent_name: 'Alex',
+        receiving_parent_name: 'Sam',
+        child_name: 'Charlie',
+        multiple_receiving_parents: false,
         other_children_in_home: 'None',
         receiving_parents: [{
             children_count: 1,
@@ -201,14 +203,15 @@ function App() {
 
                 const payload = {
                     role: childMaintenanceData.role,
-                    multiple_receiving_parents: isMultiple,
                     number_of_receiving_parents: parentsToSend.length,
                     benefits: childMaintenanceData.hasBenefits ? childMaintenanceData.benefits : [],
                     income: childMaintenanceData.hasIncome && childMaintenanceData.role === 'paying' ? Number(childMaintenanceData.income || 0) : null,
                     income_frequency: childMaintenanceData.income_frequency,
                     add_parent_names: childMaintenanceData.add_parent_names,
+                    multiple_receiving_parents: childMaintenanceData.multiple_receiving_parents,
                     paying_parent_name: childMaintenanceData.paying_parent_name,
                     receiving_parent_name: childMaintenanceData.receiving_parent_name,
+                    child_name: childMaintenanceData.child_name,
                     other_children_in_home: childMaintenanceData.other_children_in_home,
                     receiving_parents: parentsToSend.map(parent => ({
                         children_count: parent.children_count,
@@ -769,18 +772,30 @@ function App() {
                                     </div>
                                 </div>
 
-                                <div className="form-group" style={{ marginTop: 20 }}>
-                                    <label>Add parent names to calculation summary?</label>
-                                    <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-                                        <button type="button" className="tab" style={{ padding: '7px 18px', background: childMaintenanceData.add_parent_names ? 'var(--gradient)' : 'transparent', color: childMaintenanceData.add_parent_names ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
-                                            onClick={() => updateChildData('add_parent_names', true)}>Yes</button>
-                                        <button type="button" className="tab" style={{ padding: '7px 18px', background: !childMaintenanceData.add_parent_names ? 'var(--gradient)' : 'transparent', color: !childMaintenanceData.add_parent_names ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
-                                            onClick={() => updateChildData('add_parent_names', false)}>No</button>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 20 }}>
+                                    <div className="form-group">
+                                        <label>More than one other parent?</label>
+                                        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                                            <button type="button" className="tab" style={{ padding: '7px 18px', background: childMaintenanceData.multiple_receiving_parents ? 'var(--gradient)' : 'transparent', color: childMaintenanceData.multiple_receiving_parents ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                onClick={() => updateChildData('multiple_receiving_parents', true)}>Yes</button>
+                                            <button type="button" className="tab" style={{ padding: '7px 18px', background: !childMaintenanceData.multiple_receiving_parents ? 'var(--gradient)' : 'transparent', color: !childMaintenanceData.multiple_receiving_parents ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                onClick={() => updateChildData('multiple_receiving_parents', false)}>No</button>
+                                        </div>
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>Add parent names to calculation summary?</label>
+                                        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                                            <button type="button" className="tab" style={{ padding: '7px 18px', background: childMaintenanceData.add_parent_names ? 'var(--gradient)' : 'transparent', color: childMaintenanceData.add_parent_names ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                onClick={() => updateChildData('add_parent_names', true)}>Yes</button>
+                                            <button type="button" className="tab" style={{ padding: '7px 18px', background: !childMaintenanceData.add_parent_names ? 'var(--gradient)' : 'transparent', color: !childMaintenanceData.add_parent_names ? '#fff' : 'var(--text-dim)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)' }}
+                                                onClick={() => updateChildData('add_parent_names', false)}>No</button>
+                                        </div>
                                     </div>
                                 </div>
 
                                 {childMaintenanceData.add_parent_names && (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 16 }}>
                                         <div className="form-group">
                                             <label>Your Name</label>
                                             <input type="text" className="input-field" value={childMaintenanceData.paying_parent_name} 
@@ -790,6 +805,18 @@ function App() {
                                             <label>Other Parent's Name</label>
                                             <input type="text" className="input-field" value={childMaintenanceData.receiving_parent_name} 
                                                 onChange={e => updateChildData('receiving_parent_name', e.target.value)} />
+                                        </div>
+                                        <div className="form-group">
+                                            <label>Child's Name</label>
+                                            <input type="text" className="input-field" value={childMaintenanceData.child_name} 
+                                                onChange={e => {
+                                                    const val = e.target.value;
+                                                    updateChildData('child_name', val);
+                                                    // Also update the first child of the first parent for consistency
+                                                    if (childMaintenanceData.receiving_parents.length > 0) {
+                                                        updateChildName(0, 0, val);
+                                                    }
+                                                }} />
                                         </div>
                                     </div>
                                 )}

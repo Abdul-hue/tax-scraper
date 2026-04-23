@@ -53,7 +53,8 @@ class MousePriceScraper:
         request_timeout: int = 30,
         min_delay: int = 12,
         max_delay: int = 28,
-        max_retries: int = 4
+        max_retries: int = 4,
+        headless: bool = True
     ):
         # Resolve paths relative to this script's directory if they are relative
         base_path = Path(__file__).parent
@@ -64,6 +65,7 @@ class MousePriceScraper:
         self.min_delay = min_delay
         self.max_delay = max_delay
         self.max_retries = max_retries
+        self.headless = headless
         self.base_url = "https://www.mouseprice.com"
         
         self.proxy_pool = self._load_proxies()
@@ -243,7 +245,7 @@ class MousePriceScraper:
             file_url = html_file_path.resolve().as_uri()
 
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(headless=self.headless)
                 page = browser.new_page(viewport={"width": 1280, "height": 900})
                 page.goto(file_url, wait_until="domcontentloaded")
                 screenshot_bytes = page.screenshot(full_page=False)
