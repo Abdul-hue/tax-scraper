@@ -59,19 +59,15 @@ class ParkersScraper:
             launch_args = {
                 "user_data_dir": str(user_data_path),
                 "headless": self.headless,
-                "args": [
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-infobars",
-                    "--window-size=1920,1080",
-                ],
+                "args": get_browser_args() + ["--window-size=1920,1080"],
                 "ignore_default_args": ["--enable-automation"],
                 "accept_downloads": True,
                 "viewport": {"width": 1920, "height": 1080},
             }
 
-            # Add channel only if not in Docker (Docker only has Chromium)
-            if not self.headless:
+            # Add channel only if on Windows/local (where Chrome is likely installed)
+            # Docker (Linux) usually only has Chromium unless explicitly added.
+            if not self.headless and os.name == "nt":
                 launch_args["channel"] = "chrome"
 
             try:
@@ -154,14 +150,7 @@ class ParkersScraper:
                         message="Could not find VRM input field — Cloudflare may be blocking or site layout changed"
                     )
 
-                # Clear lingering overlays before interacting
-                page.evaluate("""
-                    () => {
-                        document.querySelectorAll(
-                            'div[id^="sp_message_container"], div[role="dialog"][aria-modal="true"]'
-                        ).forEach(el => el.remove());
-                    }
-                """)
+                self._dismiss_overlays(page)
 
                 plate_input = page.locator(vrm_selector)
                 plate_input.click(force=True)
@@ -250,6 +239,7 @@ class ParkersScraper:
 
                 # STEP 3: Select valuation purpose
                 logger.info("Selecting valuation purpose...")
+                self._dismiss_overlays(page)
                 page.check('#curious')
                 page.click('#valuation-confirmation-link')
                 page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -265,16 +255,7 @@ class ParkersScraper:
                 try:
                     page.wait_for_selector(".valuation-price-box__price", timeout=15000, state='attached')
 
-                    page.evaluate("""
-                        () => {
-                            const popup = document.getElementById('newsletterSignup')
-                            if (popup) popup.remove()
-                            const overlays = document.querySelectorAll('[class*="overlay"], [class*="modal"], [class*="popup"]')
-                            overlays.forEach(el => el.remove())
-                            const vis = document.getElementById('_vis_opt_path_hides')
-                            if (vis) vis.remove()
-                        }
-                    """)
+                    self._dismiss_overlays(page)
 
                     vehicle_full_name = page.locator("span.valuation-option-box__header-row--vehicle").first.inner_text().strip()
                 except Exception as e:
@@ -385,3 +366,30 @@ class ParkersScraper:
         screenshot_bytes = page.screenshot(full_page=True)
         screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
         logger.info("Error screenshot uploaded to S3: %s", screenshot_url)
+
+    def _dismiss_overlays(self, page):
+        """Remove popups and overlays that block interactions."""
+        try:
+            page.evaluate("""
+                () => {
+                    const selectors = [
+                        '#newsletterSignup',
+                        '.newsletter-signup',
+                        'div[id^="sp_message_container"]',
+                        'div[role="dialog"][aria-modal="true"]',
+                        '[class*="overlay"]',
+                        '[class*="modal"]',
+                        '[class*="popup"]',
+                        '#onetrust-banner-sdk',
+                        '#_vis_opt_path_hides'
+                    ];
+                    selectors.forEach(sel => {
+                        document.querySelectorAll(sel).forEach(el => el.remove());
+                    });
+                    // Also fix body overflow if it was locked
+                    document.body.style.overflow = 'auto';
+                    document.documentElement.style.overflow = 'auto';
+                }
+            """)
+        except Exception as e:
+            logger.debug(f"Overlay dismissal failed: {e}")

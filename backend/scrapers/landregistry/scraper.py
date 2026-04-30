@@ -137,12 +137,8 @@ class LandRegistryScraper:
                 launch_args = {
                     "user_data_dir": str(user_data_path),
                     "headless": self.headless,
-                    "args": [
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-blink-features=AutomationControlled",
+                    "args": get_browser_args() + [
                         "--disable-features=IsolateOrigins,site-per-process",
-                        "--disable-infobars",
                         "--start-maximized",
                         "--flag-switches-begin",
                         "--disable-site-isolation-trials",

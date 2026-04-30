@@ -12,7 +12,8 @@ def get_browser_args():
     ]
 
     # Linux/Docker specific arguments
-    if platform.system() == "Linux" or os.environ.get("DOCKER_CONTAINER"):
+    # --no-sandbox is REQUIRED for running as root in Docker, but causes warnings on Windows
+    if os.name != 'nt' or os.environ.get("DOCKER_CONTAINER"):
         args.extend([
             "--no-sandbox",
             "--disable-dev-shm-usage",
