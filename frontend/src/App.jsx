@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import axios from 'axios'
-import { Calculator, MapPin, Loader2, Camera, ExternalLink, Settings2, Car, Home, Building2, UserCheck, Users, Scale } from 'lucide-react'
+import { Calculator, MapPin, Loader2, Camera, ExternalLink, Settings2, Car, Home, Building2, UserCheck, Users, Scale, Search } from 'lucide-react'
 
 function App() {
     const [activeTab, setActiveTab] = useState('taxman')
@@ -17,6 +17,9 @@ function App() {
     const [postcode, setPostcode] = useState('LS278RR')
     const [plate, setPlate] = useState('BD51SMM')
     const [mousepricePostcode, setMousepricePostcode] = useState('SW1A 1AA')
+
+    const [eiirData, setEiirData] = useState({ forename: '', surname: '', follow_details: true })
+    const updateEiirData = (key, value) => setEiirData(prev => ({ ...prev, [key]: value }))
 
     const [hpiData, setHpiData] = useState({
         locationMode: 'optionRegion', region: 'Greater London', postcode: '',
@@ -262,6 +265,14 @@ function App() {
                 endpoint = `/api/scrapers/landregistry?${params.toString()}`
             } else if (activeTab === 'mouseprice') {
                 endpoint = `/api/scrapers/mouseprice?postcode=${mousepricePostcode}`
+            } else if (activeTab === 'eiir') {
+                const params = new URLSearchParams({
+                    forename: eiirData.forename,
+                    surname: eiirData.surname,
+                    follow_details: eiirData.follow_details.toString(),
+                })
+                endpoint = `/api/scrapers/eiir?${params.toString()}`
+                timeout = 300000;
             } else if (activeTab === 'idu') {
                 endpoint = `/api/scrapers/idu?${new URLSearchParams(iduData).toString()}`
                 timeout = 300000; // 5 mins for IDU
@@ -393,6 +404,7 @@ function App() {
                     { id: 'lps', label: 'LPS Valuation', icon: <Building2 size={18} /> },
                     { id: 'landregistry', label: 'Land Registry', icon: <Building2 size={18} /> },
                     { id: 'child-maintenance', label: 'Child Maintenance', icon: <Scale size={18} /> },
+                    { id: 'eiir', label: 'Insolvency Register', icon: <Search size={18} /> },
                     { id: 'idu', label: 'IDU', icon: <UserCheck size={18} /> },
                 ].map(tab => (
                     <button key={tab.id} className={`tab ${activeTab === tab.id ? 'active' : ''}`}
@@ -484,6 +496,25 @@ function App() {
                         <div className="form-group">
                             <label>Postcode</label>
                             <input type="text" className="input-field" value={mousepricePostcode} onChange={e => setMousepricePostcode(e.target.value.toUpperCase())} placeholder="e.g. SW1A 1AA" style={{ textTransform: 'uppercase' }} />
+                        </div>
+                    )}
+
+                    {activeTab === 'eiir' && (
+                        <div className="form-grid">
+                            <div className="form-group">
+                                <label>Forename</label>
+                                <input type="text" className="input-field" value={eiirData.forename} onChange={e => updateEiirData('forename', e.target.value)} placeholder="e.g. John" />
+                            </div>
+                            <div className="form-group">
+                                <label>Surname</label>
+                                <input type="text" className="input-field" value={eiirData.surname} onChange={e => updateEiirData('surname', e.target.value)} placeholder="e.g. Smith" />
+                            </div>
+                            <div className="form-group checkbox-group" style={{ gridColumn: 'span 2' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={eiirData.follow_details} onChange={e => updateEiirData('follow_details', e.target.checked)} />
+                                    Follow each result into its detail page (slower, richer data)
+                                </label>
+                            </div>
                         </div>
                     )}
 
@@ -1005,6 +1036,50 @@ function App() {
                                         ))}
                                     </tbody>
                                 </table>
+                                <ScreenshotPreview url={result.screenshot_url} />
+                            </div>
+                        )}
+
+                        {activeTab === 'eiir' && (
+                            <div>
+                                <p style={{ fontSize: '0.8rem', color: '#8b949e', marginBottom: 8 }}>
+                                    {result.records?.length || 0} record{(result.records?.length || 0) === 1 ? '' : 's'} found
+                                    {result.search_term ? ` for "${result.search_term}"` : ''}
+                                </p>
+                                {result.records?.length > 0 ? (
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>Type</th>
+                                                <th>Court</th>
+                                                <th>Case #</th>
+                                                <th>Date of Order</th>
+                                                <th>Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {result.records.map((rec, idx) => (
+                                                <tr key={idx}>
+                                                    <td style={{ fontSize: '0.8rem' }}>
+                                                        {rec.detail_url ? (
+                                                            <a href={rec.detail_url} target="_blank" rel="noopener noreferrer" style={{ color: '#58a6ff', textDecoration: 'none' }}>
+                                                                {rec.name || '—'} <ExternalLink size={12} style={{ verticalAlign: 'middle' }} />
+                                                            </a>
+                                                        ) : (rec.name || '—')}
+                                                    </td>
+                                                    <td style={{ fontSize: '0.8rem' }}>{rec.insolvency_type || '—'}</td>
+                                                    <td style={{ fontSize: '0.8rem' }}>{rec.court || '—'}</td>
+                                                    <td style={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>{rec.case_number || '—'}</td>
+                                                    <td style={{ fontSize: '0.8rem' }}>{rec.date_of_order || '—'}</td>
+                                                    <td style={{ fontSize: '0.8rem' }}>{rec.status || '—'}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                ) : (
+                                    <p style={{ fontSize: '0.85rem', color: '#8b949e' }}>{result.error || 'No records returned.'}</p>
+                                )}
                                 <ScreenshotPreview url={result.screenshot_url} />
                             </div>
                         )}
