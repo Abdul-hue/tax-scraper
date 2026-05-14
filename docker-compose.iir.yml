@@ -1,0 +1,34 @@
+services:
+  iir-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: iir-scraper-tool
+    container_name: iir-scraper-tool
+    shm_size: '2gb'
+    ports:
+      - "3414:3412"
+      - "7889:7887"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PORT=7887
+      - CHROMIUM_FLAGS=--no-sandbox --disable-dev-shm-usage
+      - HEADLESS=false
+    volumes:
+      - iir_scraper_screenshots:/app/static/screenshots
+      - iir_scraper_chrome_profile:/app/chrome_profile
+      - iir_scraper_output:/app/output
+      - iir_scraper_downloads:/app/downloads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3412/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  iir_scraper_screenshots:
+  iir_scraper_chrome_profile:
+  iir_scraper_output:
+  iir_scraper_downloads:
