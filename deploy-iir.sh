@@ -83,6 +83,17 @@ echo "📤 Syncing $COMPOSE_FILE_LOCAL to server (as docker-compose.yml in $TARG
 scp -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no \
     "$COMPOSE_FILE_LOCAL" "$SSH_USER@$SSH_HOST:/tmp/iir-docker-compose.yml"
 
+# ── Sync the runtime .env file to the server (required by docker-compose env_file)
+APP_ENV_LOCAL="backend/.env"
+if [ ! -f "$APP_ENV_LOCAL" ]; then
+    echo "❌ Error: $APP_ENV_LOCAL not found. The runtime app env (S3 keys, IDU creds, etc.)"
+    echo "   is required for the container to function. Create it before redeploying."
+    exit 1
+fi
+echo "📤 Syncing runtime $APP_ENV_LOCAL to server..."
+scp -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no \
+    "$APP_ENV_LOCAL" "$SSH_USER@$SSH_HOST:/tmp/iir-app.env"
+
 # ── Transfer sudo password via a temp file ───────────────────────────────────
 PASS_TMPFILE=$(mktemp /tmp/iir_deploy_pass.XXXXXX)
 printf '%s' "$SSH_PASSWORD" > "$PASS_TMPFILE"
@@ -126,6 +137,10 @@ ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" bash <<
 
     cp /tmp/iir-docker-compose.yml ./docker-compose.yml
     rm -f /tmp/iir-docker-compose.yml
+
+    cp /tmp/iir-app.env ./.env
+    rm -f /tmp/iir-app.env
+    chmod 600 ./.env
 
     # 4. Stop ONLY the iir-scraper service in this compose project.
     #    Other compose projects on this host (staging-scraper, production-scraper,

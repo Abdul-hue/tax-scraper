@@ -9,11 +9,12 @@ services:
     ports:
       - "3414:3412"
       - "7889:7887"
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - PORT=7887
       - CHROMIUM_FLAGS=--no-sandbox --disable-dev-shm-usage
-      - HEADLESS=false
     volumes:
       - iir_scraper_screenshots:/app/static/screenshots
       - iir_scraper_chrome_profile:/app/chrome_profile
