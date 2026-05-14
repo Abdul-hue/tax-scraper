@@ -7,7 +7,14 @@ from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from .models import EiirQuery, EiirResult, EiirRecord
-from .parser import parse_results, parse_detail, parse_no_results_message
+from .parser import (
+    parse_results,
+    parse_detail,
+    parse_no_results_message,
+    extract_key_fields,
+    normalise_dob,
+    is_iva,
+)
 from ..common.browser import get_browser_args
 from app.core.s3 import upload_screenshot_to_s3_sync
 
@@ -41,24 +48,33 @@ class EiirScraper:
     def __exit__(self, *args):
         pass
 
-    def lookup(self, forename: str, surname: str, follow_details: bool = True) -> EiirResult:
-        query = EiirQuery(forename=forename, surname=surname, follow_details=follow_details)
+    def lookup(self, forename: str, surname: str, dob: str = "", follow_details: bool = True) -> EiirResult:
+        query = EiirQuery(forename=forename, surname=surname, dob=dob, follow_details=follow_details)
         return self.search(query)
 
     def search(self, query: EiirQuery) -> EiirResult:
         search_term = f"{query.forename} {query.surname}".strip()
+        target_dob = normalise_dob(query.dob) if query.dob else None
+
         result = EiirResult(
             search_term=search_term,
             forename=query.forename,
             surname=query.surname,
+            dob=target_dob or query.dob,
             scraped_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
 
         if not search_term:
             result.error = "search_term is empty — provide a forename and/or surname"
             return result
+        if query.dob and not target_dob:
+            result.error = f"could not parse DOB '{query.dob}' — use DD/MM/YYYY"
+            return result
 
-        logger.info("Starting EIIR search for '%s'", search_term)
+        logger.info("Starting EIIR search for '%s' (dob=%s)", search_term, target_dob or "none")
+
+        # Always follow detail pages when we need a DOB-based verdict.
+        follow = query.follow_details or bool(target_dob)
 
         try:
             with sync_playwright() as p:
@@ -92,7 +108,7 @@ class EiirScraper:
                     if not records:
                         result.error = parse_no_results_message(html) or "No EIIR records found"
                     else:
-                        if query.follow_details:
+                        if follow:
                             self._enrich_with_details(page, records)
                         result.records = records
 
@@ -104,6 +120,7 @@ class EiirScraper:
                     except Exception as e:
                         logger.warning("EIIR screenshot upload failed: %s", e)
 
+                    self._compute_verdict(result, target_dob)
                     return result
 
                 finally:
@@ -116,9 +133,9 @@ class EiirScraper:
 
     def _enrich_with_details(self, page, records: list[EiirRecord]) -> None:
         """
-        For each record with a detail_url, navigate to that page, parse the
-        summary list, and populate the record's detail fields. Errors on
-        individual records are logged but do not abort the batch.
+        For each record with a detail_url, navigate to that page, parse it,
+        and populate the record's structured fields. Errors on individual
+        records are logged but do not abort the batch.
         """
         for record in records:
             if not record.detail_url:
@@ -134,21 +151,44 @@ class EiirScraper:
                 fields = parse_detail(detail_html)
                 record.detail_fields = fields
 
-                for key, value in fields.items():
-                    k = key.lower()
-                    if "birth" in k:
-                        record.date_of_birth = value
-                    elif "address" in k:
-                        record.last_known_address = value
-                    elif "practitioner" in k or "trustee" in k:
-                        record.insolvency_practitioner = value
-                    elif "court" in k and not record.court:
-                        record.court = value
-                    elif ("case" in k or "number" in k) and not record.case_number:
-                        record.case_number = value
-                    elif "type" in k and not record.insolvency_type:
-                        record.insolvency_type = value
-                    elif "status" in k and not record.status:
-                        record.status = value
+                key_fields = extract_key_fields(fields)
+                if key_fields["dob"]:
+                    record.date_of_birth = key_fields["dob"]
+                if key_fields["last_known_address"]:
+                    record.last_known_address = key_fields["last_known_address"]
+                if key_fields["insolvency_practitioner"]:
+                    record.insolvency_practitioner = key_fields["insolvency_practitioner"]
+                if key_fields["insolvency_type"] and not record.insolvency_type:
+                    record.insolvency_type = key_fields["insolvency_type"]
+                if key_fields["court"] and not record.court:
+                    record.court = key_fields["court"]
+                if key_fields["case_number"] and not record.case_number:
+                    record.case_number = key_fields["case_number"]
+                if key_fields["status"] and not record.status:
+                    record.status = key_fields["status"]
             except Exception as e:
                 logger.warning("Failed to load EIIR detail page %s: %s", record.detail_url, e)
+
+    def _compute_verdict(self, result: EiirResult, target_dob: Optional[str]) -> None:
+        """
+        Populate result.matched_records, result.in_iva, result.verdict
+        based on the records list and the (already-normalised) target_dob.
+        """
+        if not target_dob:
+            result.verdict = "no_dob_provided"
+            return
+
+        matched = [r for r in result.records if r.date_of_birth and r.date_of_birth == target_dob]
+        result.matched_records = matched
+
+        if not matched:
+            result.in_iva = False
+            result.verdict = "not_on_register"
+            return
+
+        if any(is_iva(r.insolvency_type) for r in matched):
+            result.in_iva = True
+            result.verdict = "currently_in_iva"
+        else:
+            result.in_iva = False
+            result.verdict = "in_other_insolvency"

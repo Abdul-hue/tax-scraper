@@ -18,7 +18,7 @@ function App() {
     const [plate, setPlate] = useState('BD51SMM')
     const [mousepricePostcode, setMousepricePostcode] = useState('SW1A 1AA')
 
-    const [eiirData, setEiirData] = useState({ forename: '', surname: '', follow_details: true })
+    const [eiirData, setEiirData] = useState({ forename: '', surname: '', dd: '', mm: '', yyyy: '' })
     const updateEiirData = (key, value) => setEiirData(prev => ({ ...prev, [key]: value }))
 
     const [hpiData, setHpiData] = useState({
@@ -266,10 +266,14 @@ function App() {
             } else if (activeTab === 'mouseprice') {
                 endpoint = `/api/scrapers/mouseprice?postcode=${mousepricePostcode}`
             } else if (activeTab === 'eiir') {
+                const dob = (eiirData.dd && eiirData.mm && eiirData.yyyy)
+                    ? `${eiirData.dd.padStart(2, '0')}/${eiirData.mm.padStart(2, '0')}/${eiirData.yyyy}`
+                    : ''
                 const params = new URLSearchParams({
                     forename: eiirData.forename,
                     surname: eiirData.surname,
-                    follow_details: eiirData.follow_details.toString(),
+                    dob: dob,
+                    follow_details: 'true',
                 })
                 endpoint = `/api/scrapers/eiir?${params.toString()}`
                 timeout = 300000;
@@ -502,18 +506,23 @@ function App() {
                     {activeTab === 'eiir' && (
                         <div className="form-grid">
                             <div className="form-group">
-                                <label>Forename</label>
+                                <label>Forename *</label>
                                 <input type="text" className="input-field" value={eiirData.forename} onChange={e => updateEiirData('forename', e.target.value)} placeholder="e.g. John" />
                             </div>
                             <div className="form-group">
-                                <label>Surname</label>
+                                <label>Surname *</label>
                                 <input type="text" className="input-field" value={eiirData.surname} onChange={e => updateEiirData('surname', e.target.value)} placeholder="e.g. Smith" />
                             </div>
-                            <div className="form-group checkbox-group" style={{ gridColumn: 'span 2' }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={eiirData.follow_details} onChange={e => updateEiirData('follow_details', e.target.checked)} />
-                                    Follow each result into its detail page (slower, richer data)
-                                </label>
+                            <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                                <label>Date of Birth (DD / MM / YYYY) *</label>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <input type="text" className="input-field" style={{ width: 70 }} maxLength={2} value={eiirData.dd} onChange={e => updateEiirData('dd', e.target.value.replace(/\D/g, ''))} placeholder="DD" />
+                                    <input type="text" className="input-field" style={{ width: 70 }} maxLength={2} value={eiirData.mm} onChange={e => updateEiirData('mm', e.target.value.replace(/\D/g, ''))} placeholder="MM" />
+                                    <input type="text" className="input-field" style={{ width: 100 }} maxLength={4} value={eiirData.yyyy} onChange={e => updateEiirData('yyyy', e.target.value.replace(/\D/g, ''))} placeholder="YYYY" />
+                                </div>
+                                <p style={{ fontSize: '0.7rem', color: '#8b949e', marginTop: 6 }}>
+                                    DOB is used to match the right person on the public register and determine whether they are currently in an Individual Voluntary Arrangement (IVA).
+                                </p>
                             </div>
                         </div>
                     )}
@@ -1040,49 +1049,113 @@ function App() {
                             </div>
                         )}
 
-                        {activeTab === 'eiir' && (
-                            <div>
-                                <p style={{ fontSize: '0.8rem', color: '#8b949e', marginBottom: 8 }}>
-                                    {result.records?.length || 0} record{(result.records?.length || 0) === 1 ? '' : 's'} found
-                                    {result.search_term ? ` for "${result.search_term}"` : ''}
-                                </p>
-                                {result.records?.length > 0 ? (
-                                    <table>
-                                        <thead>
-                                            <tr>
-                                                <th>Name</th>
-                                                <th>Type</th>
-                                                <th>Court</th>
-                                                <th>Case #</th>
-                                                <th>Date of Order</th>
-                                                <th>Status</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {result.records.map((rec, idx) => (
-                                                <tr key={idx}>
-                                                    <td style={{ fontSize: '0.8rem' }}>
-                                                        {rec.detail_url ? (
-                                                            <a href={rec.detail_url} target="_blank" rel="noopener noreferrer" style={{ color: '#58a6ff', textDecoration: 'none' }}>
-                                                                {rec.name || '—'} <ExternalLink size={12} style={{ verticalAlign: 'middle' }} />
-                                                            </a>
-                                                        ) : (rec.name || '—')}
-                                                    </td>
-                                                    <td style={{ fontSize: '0.8rem' }}>{rec.insolvency_type || '—'}</td>
-                                                    <td style={{ fontSize: '0.8rem' }}>{rec.court || '—'}</td>
-                                                    <td style={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>{rec.case_number || '—'}</td>
-                                                    <td style={{ fontSize: '0.8rem' }}>{rec.date_of_order || '—'}</td>
-                                                    <td style={{ fontSize: '0.8rem' }}>{rec.status || '—'}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                ) : (
-                                    <p style={{ fontSize: '0.85rem', color: '#8b949e' }}>{result.error || 'No records returned.'}</p>
-                                )}
-                                <ScreenshotPreview url={result.screenshot_url} />
-                            </div>
-                        )}
+                        {activeTab === 'eiir' && (() => {
+                            const verdict = result.verdict || ''
+                            const inIva = !!result.in_iva
+                            const matched = result.matched_records || []
+                            const allRecords = result.records || []
+
+                            const verdictMessage = {
+                                currently_in_iva:     { label: 'Currently in IVA', sub: 'A record matching this name + DOB has an Individual Voluntary Arrangement on the live register.', color: '#56d364', bg: 'rgba(86,211,100,0.10)', border: '#56d364' },
+                                in_other_insolvency:  { label: 'Not in IVA', sub: 'Name + DOB match an insolvency record, but the type is not an IVA. See matched records below.', color: '#f6b93b', bg: 'rgba(246,185,59,0.10)', border: '#f6b93b' },
+                                not_on_register:      { label: 'Not in IVA', sub: 'No record matching this name and date of birth was found on the live register.', color: '#8b949e', bg: 'rgba(139,148,158,0.10)', border: '#8b949e' },
+                                no_dob_provided:      { label: 'No DOB provided', sub: 'Showing all records for the name. Add a DOB to get a definitive IVA verdict.', color: '#58a6ff', bg: 'rgba(88,166,255,0.10)', border: '#58a6ff' },
+                            }[verdict] || { label: '—', sub: '', color: '#8b949e', bg: 'rgba(139,148,158,0.10)', border: '#8b949e' }
+
+                            return (
+                                <div>
+                                    <div style={{ padding: 16, marginBottom: 16, background: verdictMessage.bg, border: `1px solid ${verdictMessage.border}`, borderRadius: 8 }}>
+                                        <div style={{ fontSize: '1rem', fontWeight: 600, color: verdictMessage.color, marginBottom: 4 }}>
+                                            {verdict === 'currently_in_iva' ? '✓ ' : ''}{verdictMessage.label}
+                                        </div>
+                                        <div style={{ fontSize: '0.78rem', color: '#c9d1d9' }}>{verdictMessage.sub}</div>
+                                        <div style={{ fontSize: '0.72rem', color: '#8b949e', marginTop: 8 }}>
+                                            Searched: <strong>{result.search_term || '—'}</strong>
+                                            {result.dob ? <> &nbsp;·&nbsp; DOB: <strong>{result.dob}</strong></> : null}
+                                            &nbsp;·&nbsp; {allRecords.length} record{allRecords.length === 1 ? '' : 's'} returned · {matched.length} matched DOB
+                                        </div>
+                                    </div>
+
+                                    {matched.length > 0 && (
+                                        <>
+                                            <h4 style={{ fontSize: '0.85rem', color: '#c9d1d9', marginBottom: 6 }}>Matched records (name + DOB)</h4>
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Name</th>
+                                                        <th>Type</th>
+                                                        <th>Court</th>
+                                                        <th>Case #</th>
+                                                        <th>Date of Order</th>
+                                                        <th>Status</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {matched.map((rec, idx) => (
+                                                        <tr key={idx} style={{ background: 'rgba(86,211,100,0.05)' }}>
+                                                            <td style={{ fontSize: '0.8rem' }}>
+                                                                {rec.detail_url ? (
+                                                                    <a href={rec.detail_url} target="_blank" rel="noopener noreferrer" style={{ color: '#58a6ff', textDecoration: 'none' }}>
+                                                                        {rec.name || '—'} <ExternalLink size={12} style={{ verticalAlign: 'middle' }} />
+                                                                    </a>
+                                                                ) : (rec.name || '—')}
+                                                            </td>
+                                                            <td style={{ fontSize: '0.8rem', fontWeight: 600 }}>{rec.insolvency_type || '—'}</td>
+                                                            <td style={{ fontSize: '0.8rem' }}>{rec.court || '—'}</td>
+                                                            <td style={{ fontSize: '0.8rem', fontFamily: 'monospace' }}>{rec.case_number || '—'}</td>
+                                                            <td style={{ fontSize: '0.8rem' }}>{rec.date_of_order || '—'}</td>
+                                                            <td style={{ fontSize: '0.8rem' }}>{rec.status || '—'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </>
+                                    )}
+
+                                    {allRecords.length > 0 && (
+                                        <details style={{ marginTop: 16 }}>
+                                            <summary style={{ fontSize: '0.8rem', color: '#8b949e', cursor: 'pointer' }}>
+                                                Show all {allRecords.length} record{allRecords.length === 1 ? '' : 's'} returned for "{result.search_term}"
+                                            </summary>
+                                            <table style={{ marginTop: 8 }}>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Name</th>
+                                                        <th>DOB</th>
+                                                        <th>Type</th>
+                                                        <th>Date of Order</th>
+                                                        <th>Status</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {allRecords.map((rec, idx) => (
+                                                        <tr key={idx}>
+                                                            <td style={{ fontSize: '0.78rem' }}>
+                                                                {rec.detail_url ? (
+                                                                    <a href={rec.detail_url} target="_blank" rel="noopener noreferrer" style={{ color: '#58a6ff', textDecoration: 'none' }}>
+                                                                        {rec.name || '—'}
+                                                                    </a>
+                                                                ) : (rec.name || '—')}
+                                                            </td>
+                                                            <td style={{ fontSize: '0.78rem' }}>{rec.date_of_birth || '—'}</td>
+                                                            <td style={{ fontSize: '0.78rem' }}>{rec.insolvency_type || '—'}</td>
+                                                            <td style={{ fontSize: '0.78rem' }}>{rec.date_of_order || '—'}</td>
+                                                            <td style={{ fontSize: '0.78rem' }}>{rec.status || '—'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </details>
+                                    )}
+
+                                    {allRecords.length === 0 && verdict !== 'not_on_register' && (
+                                        <p style={{ fontSize: '0.85rem', color: '#8b949e' }}>{result.error || 'No records returned.'}</p>
+                                    )}
+
+                                    <ScreenshotPreview url={result.screenshot_url} />
+                                </div>
+                            )
+                        })()}
 
                         {activeTab === 'parkers' && result && (
                             <div style={{ background: 'rgba(23, 37, 84, 0.4)', border: '1px solid rgba(30, 58, 138, 0.5)', borderRadius: 8, padding: 16, marginTop: 16 }}>

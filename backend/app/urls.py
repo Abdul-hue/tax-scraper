@@ -236,16 +236,20 @@ async def get_idu(
 async def get_eiir(
     forename: str = "",
     surname: str = "",
+    dob: str = "",
     follow_details: bool = True,
 ):
     """
-    Search the UK Individual Insolvency Register (EIIR) by name.
-    Provide forename and/or surname — they are joined into a single search term.
-    Set follow_details=false to skip per-record detail-page lookups.
+    Search the UK Individual Insolvency Register (EIIR) by name + DOB.
+
+    Provide forename and surname (joined into a single search term) plus a
+    DOB (DD/MM/YYYY or YYYY-MM-DD) to get a structured `in_iva` verdict.
+    With no DOB, returns the raw record list without a verdict.
     """
     result = await run_eiir_scraper(
         forename=forename,
         surname=surname,
+        dob=dob,
         follow_details=follow_details,
     )
     return scraper_response(result)

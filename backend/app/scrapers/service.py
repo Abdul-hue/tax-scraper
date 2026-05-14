@@ -328,10 +328,12 @@ async def run_landregistry_scraper(
 async def run_eiir_scraper(
     forename: str,
     surname: str,
+    dob: str = "",
     follow_details: bool = True,
 ) -> dict:
     """
     Service function to run the UK Individual Insolvency Register (EIIR) scraper.
+    When dob is provided the result includes an in_iva verdict.
     """
     from scrapers.eiir.scraper import EiirScraper
     from scrapers.eiir.models import EiirQuery
@@ -339,6 +341,7 @@ async def run_eiir_scraper(
     query = EiirQuery(
         forename=forename,
         surname=surname,
+        dob=dob,
         follow_details=follow_details,
     )
 

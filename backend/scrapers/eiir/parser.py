@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import datetime
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -10,6 +11,50 @@ from .models import EiirRecord
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.insolvencydirect.bis.gov.uk"
+
+IVA_KEYWORDS = ("individual voluntary arrangement", "iva")
+
+DOB_PATTERNS = [
+    "%Y-%m-%d",
+    "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d %m %Y",
+    "%d %B %Y", "%d %b %Y",
+    "%B %d %Y", "%b %d %Y",
+]
+
+
+def normalise_dob(raw: str) -> Optional[str]:
+    """
+    Normalise a DOB string to ISO 'YYYY-MM-DD'. Returns None if no recognised
+    date can be extracted. Tolerates extra surrounding text by extracting the
+    first date-like substring before parsing.
+    """
+    if not raw:
+        return None
+    text = raw.strip()
+
+    # Extract a date-shaped substring if there's surrounding text
+    m = re.search(r"\b\d{1,2}[\s/.-]+(?:\d{1,2}|[A-Za-z]+)[\s/.-]+\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b", text)
+    if m:
+        text = m.group(0)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    for fmt in DOB_PATTERNS:
+        try:
+            dt = datetime.strptime(text, fmt)
+            if dt.year < 100:
+                dt = dt.replace(year=dt.year + 1900)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def is_iva(insolvency_type: str) -> bool:
+    """True if the type string indicates an Individual Voluntary Arrangement."""
+    if not insolvency_type:
+        return False
+    t = insolvency_type.lower()
+    return any(k in t for k in IVA_KEYWORDS)
 
 
 def parse_results(html: str) -> list[EiirRecord]:
@@ -105,8 +150,9 @@ def _assign_by_header(record: EiirRecord, header: str, value: str) -> None:
 def parse_detail(html: str) -> dict:
     """
     Parse an EIIR detail page into a dict of field name -> value.
-    GOV.UK detail pages typically use a `dl.govuk-summary-list` with `dt`/`dd`
-    pairs, but we also handle a plain key/value `<table>` as a fallback.
+    Tries dl.govuk-summary-list dt/dd pairs first, falls back to plain
+    key/value tables, and finally to a "Label: value" line scan so we
+    capture whatever the live page is actually rendering.
     """
     soup = BeautifulSoup(html, "html.parser")
     fields: dict[str, str] = {}
@@ -122,14 +168,58 @@ def parse_detail(html: str) -> dict:
 
     if not fields:
         for row in soup.select("table tr"):
-            cells = row.find_all(["th", "td"])
-            if len(cells) >= 2:
-                key = cells[0].get_text(" ", strip=True)
-                value = cells[1].get_text(" ", strip=True)
+            row_cells = row.find_all(["th", "td"])
+            if len(row_cells) >= 2:
+                key = row_cells[0].get_text(" ", strip=True)
+                value = row_cells[1].get_text(" ", strip=True)
                 if key:
                     fields[key] = value
 
+    if not fields:
+        body_text = soup.get_text("\n", strip=True)
+        for line in body_text.splitlines():
+            m = re.match(r"^([A-Za-z][A-Za-z /()'’-]{2,60})\s*[:\-]\s*(.+)$", line)
+            if m:
+                key, value = m.group(1).strip(), m.group(2).strip()
+                if key and value and key not in fields:
+                    fields[key] = value
+
     return fields
+
+
+def extract_key_fields(detail_fields: dict) -> dict:
+    """
+    Reduce a raw detail-page dict to the canonical fields the matcher needs.
+    Returns: {dob: str|None (ISO), insolvency_type: str, court: str,
+              case_number: str, status: str, last_known_address: str,
+              insolvency_practitioner: str}.
+    """
+    out = {
+        "dob": None,
+        "insolvency_type": "",
+        "court": "",
+        "case_number": "",
+        "status": "",
+        "last_known_address": "",
+        "insolvency_practitioner": "",
+    }
+    for key, value in detail_fields.items():
+        k = key.lower()
+        if "birth" in k:
+            out["dob"] = normalise_dob(value)
+        elif "type" in k and "case" not in k:
+            out["insolvency_type"] = value
+        elif "court" in k:
+            out["court"] = value
+        elif "case" in k or "number" in k:
+            out["case_number"] = value
+        elif "status" in k:
+            out["status"] = value
+        elif "address" in k:
+            out["last_known_address"] = value
+        elif "practitioner" in k or "trustee" in k or "supervisor" in k:
+            out["insolvency_practitioner"] = value
+    return out
 
 
 def parse_no_results_message(html: str) -> Optional[str]:
