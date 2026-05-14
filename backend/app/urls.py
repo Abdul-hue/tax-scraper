@@ -1,7 +1,34 @@
-from fastapi import APIRouter, Query, HTTPException, Response, Body
+from fastapi import APIRouter, Query, HTTPException, Response, Body, Depends, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
+from typing import Optional
 import os
 import json
+
+
+# ── EIIR API key gate ────────────────────────────────────────────────────────
+# Allows two ways in:
+#   1. External callers (call agent, n8n, scripts) send X-API-Key: <key>
+#   2. The on-host React frontend at FRONTEND_ORIGIN is whitelisted via Referer,
+#      so the UI keeps working without exposing the key in the JS bundle.
+def verify_eiir_access(
+    request: Request,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    api_key = os.getenv("EIIR_API_KEY", "")
+    frontend_origin = os.getenv("FRONTEND_ORIGIN", "")
+
+    if api_key and x_api_key and x_api_key == api_key:
+        return
+
+    referer = request.headers.get("referer", "")
+    origin = request.headers.get("origin", "")
+    if frontend_origin and (referer.startswith(frontend_origin) or origin == frontend_origin):
+        return
+
+    raise HTTPException(
+        status_code=401,
+        detail="Missing or invalid X-API-Key header for /api/scrapers/eiir",
+    )
 from app.auth.router import router as auth_router
 from app.core.router import router as core_router
 from app.scrapers.service import (
@@ -232,7 +259,7 @@ async def get_idu(
     return scraper_response(result)
 
 
-@api_router.get("/scrapers/eiir", tags=["scrapers"])
+@api_router.get("/scrapers/eiir", tags=["scrapers"], dependencies=[Depends(verify_eiir_access)])
 async def get_eiir(
     forename: str = "",
     surname: str = "",
