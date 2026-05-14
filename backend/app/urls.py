@@ -12,6 +12,7 @@ from app.scrapers.service import (
     run_nationwide_scraper,
     run_landregistry_scraper,
     run_child_maintenance_scraper,
+    run_eiir_scraper,
 )
 
 api_router = APIRouter()
@@ -227,6 +228,25 @@ async def get_idu(
         mobile2=mobile2,
         landline=landline,
         landline2=landline2,
+    )
+    return scraper_response(result)
+
+
+@api_router.get("/scrapers/eiir", tags=["scrapers"])
+async def get_eiir(
+    forename: str = "",
+    surname: str = "",
+    follow_details: bool = True,
+):
+    """
+    Search the UK Individual Insolvency Register (EIIR) by name.
+    Provide forename and/or surname — they are joined into a single search term.
+    Set follow_details=false to skip per-record detail-page lookups.
+    """
+    result = await run_eiir_scraper(
+        forename=forename,
+        surname=surname,
+        follow_details=follow_details,
     )
     return scraper_response(result)
 
