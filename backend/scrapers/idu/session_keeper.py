@@ -52,7 +52,7 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
     with _idu_operation_lock:
         with sync_playwright() as p:
             browser = p.chromium.launch(
-                headless=os.getenv("IDU_HEADLESS", os.getenv("HEADLESS", "True")).lower() == "true",
+                headless=False, # os.getenv("IDU_HEADLESS", os.getenv("HEADLESS", "True")).lower() == "true",
                 args=get_browser_args(),
             )
             context = browser.new_context(

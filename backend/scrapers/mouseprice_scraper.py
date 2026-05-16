@@ -16,7 +16,16 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log
 )
+import sys
+from pathlib import Path
+
+# Add the backend directory to sys.path so 'app' can be imported when run directly
+backend_dir = Path(__file__).resolve().parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.append(str(backend_dir))
+
 from app.core.s3 import upload_screenshot_to_s3_sync
+from playwright_stealth import Stealth
 
 # ── CONFIGURATION & LOGGING ──────────────────────────────────────────────────
 
@@ -36,6 +45,10 @@ class ProxyFailedError(Exception):
     """Raised when a proxy connection fails or times out."""
     pass
 
+class ProxyAuthError(Exception):
+    """Raised when ALL proxies return 407 Proxy Authentication Required."""
+    pass
+
 # ── SCRAPER CLASS ────────────────────────────────────────────────────────────
 
 class MousePriceScraper:
@@ -48,17 +61,21 @@ class MousePriceScraper:
 
     def __init__(
         self,
-        proxy_file: str = "webshare_proxies.txt",
+        proxy_file: Optional[str] = None,   # FIXED: was "webshare_proxies.txt" — now optional; proxies only loaded when explicitly provided
         output_dir: str = "scraper_output",
         request_timeout: int = 30,
-        min_delay: int = 12,
-        max_delay: int = 28,
-        max_retries: int = 4,
+        min_delay: int = 18,   # FIXED: raised from 12 — Anubis more likely to block rapid requests
+        max_delay: int = 40,   # FIXED: raised from 28 — ditto
+        max_retries: int = 3,  # FIXED: was 4
         headless: bool = True
     ):
         # Resolve paths relative to this script's directory if they are relative
         base_path = Path(__file__).parent
-        self.proxy_file = base_path / proxy_file if not Path(proxy_file).is_absolute() else Path(proxy_file)
+        # FIXED: proxy_file is now Optional[str]; only resolve path when a value is given
+        if proxy_file:
+            self.proxy_file: Optional[Path] = base_path / proxy_file if not Path(proxy_file).is_absolute() else Path(proxy_file)
+        else:
+            self.proxy_file = None  # FIXED: no proxy file — will run direct
         self.output_dir = base_path / output_dir if not Path(output_dir).is_absolute() else Path(output_dir)
         
         self.request_timeout = request_timeout
@@ -68,7 +85,10 @@ class MousePriceScraper:
         self.headless = headless
         self.base_url = "https://www.mouseprice.com"
         
-        self.proxy_pool = self._load_proxies()
+        # FIXED: only load proxies if a file path was given
+        self.proxy_pool = self._load_proxies() if proxy_file else []
+        if not self.proxy_pool:
+            logger.info("🚀 No proxies configured — running in direct (no-proxy) mode.")
         self.ua = UserAgent()
         
         if not self.output_dir.exists():
@@ -78,13 +98,10 @@ class MousePriceScraper:
 
     def _load_proxies(self) -> List[Dict[str, str]]:
         """Parses the proxy file and returns a list of proxy dictionaries."""
-        if not self.proxy_file.exists():
-            # Check one level up if not found (common in certain project structures)
-            alt_path = self.proxy_file.parent.parent / self.proxy_file.name
-            if alt_path.exists():
-                self.proxy_file = alt_path
-            else:
-                raise FileNotFoundError(f"Proxy file not found at {self.proxy_file}")
+        # FIXED: return [] instead of raising FileNotFoundError when no file is configured or file missing
+        if not self.proxy_file or not Path(self.proxy_file).exists():
+            logger.info("No proxy file found — skipping proxy loading.")
+            return []
 
         proxies = []
         with open(self.proxy_file, "r", encoding="utf-8") as f:
@@ -107,9 +124,10 @@ class MousePriceScraper:
                 })
 
         if not proxies:
-            raise ValueError(f"No valid proxies found in {self.proxy_file}")
+            logger.warning(f"No valid proxies found in {self.proxy_file} — running direct.")  # FIXED: warn instead of raise
+            return []
         
-        logger.info(f"Loaded {len(proxies)} proxies from {self.proxy_file}")
+        logger.info(f"✅ Successfully loaded {len(proxies)} proxies from {self.proxy_file.name}")
         return proxies
 
     def _get_random_proxy(self) -> Dict[str, str]:
@@ -141,79 +159,241 @@ class MousePriceScraper:
             "DNT": "1"
         }
 
-    def _build_session(self, proxy: Dict[str, str]) -> requests.Session:
-        """
-        Creates a requests.Session with the provided proxy and random headers.
-        
-        WHY SESSIONS:
-        1. TCP Connection Reuse: Reusing connections (keep-alive) reduces latency 
-           and mimics browser behavior.
-        2. Cookie Management: Sessions persist cookies across requests, which is 
-           essential for multi-step navigation and bypassing basic anti-bot.
-        """
-        session = requests.Session()
-        session.proxies = {k: v for k, v in proxy.items() if not k.startswith("_")}
-        session.headers.update(self._get_headers())
-        return session
-
     # ── CORE FETCH LOGIC ──────────────────────────────────────────────────────
 
-    def fetch_page(self, url: str, session: Optional[requests.Session] = None) -> requests.Response:
+    def _is_anubis_page(self, content: str) -> bool:
+        """Returns True if the page content looks like an Anubis challenge page."""
+        # FIXED: replaced single-string check with multi-signal detection
+        content_lower = content.lower()
+        signals = [
+            "anubis",
+            "proof of work",
+            "proof-of-work",
+            "making sure you're not a bot",
+            "checking your browser",
+            "please wait while we verify",
+            "window._anubis",
+            "anubis_challenge",
+        ]
+        return any(s in content_lower for s in signals)
+
+    def _wait_for_anubis_to_clear(self, page, timeout_ms: int = 60000) -> bool:
         """
-        Fetches a page with full retry logic and bot-bypass patterns.
+        Wait for Anubis challenge to complete. Polls multiple signals.
+        Returns True if real page loaded, False if timed out.
         """
-        # We need a wrapper to use tenacity with self
+        # FIXED: replaced single #anubis_challenge selector with JS multi-signal poll
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        logger.info("🛡️  Anubis detected — waiting for JS proof-of-work (up to %ds)...", timeout_ms // 1000)
+        try:
+            # Wait until NONE of the known Anubis signals are present in the page
+            page.wait_for_function(
+                """() => {
+                    const html = document.documentElement.innerHTML.toLowerCase();
+                    const signals = [
+                        'anubis', 'proof of work', 'proof-of-work',
+                        'making sure you', 'checking your browser',
+                        'please wait while we verify', 'window._anubis',
+                        'anubis_challenge'
+                    ];
+                    return !signals.some(s => html.includes(s));
+                }""",
+                timeout=timeout_ms
+            )
+            # Extra wait for the real page to settle after redirect
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+            logger.info("✅ Anubis challenge cleared.")
+            return True
+        except PlaywrightTimeoutError:
+            logger.warning("⏰ Anubis did not clear within %ds.", timeout_ms // 1000)
+            return False
+        except Exception as e:
+            logger.warning("⚠️  Anubis wait error: %s", e)
+            return False
+
+    def _fetch_direct_playwright(self, url: str) -> str:
+        """
+        Fetch a page using Playwright with NO proxy — last resort fallback.
+        Warms up on the homepage first to look like a real user, then navigates
+        to the target URL. Playwright runs the Anubis JS challenge automatically.
+        """
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+        logger.info("🚀 Initiating Direct Playwright fetch (No Proxy) to bypass persistent blocks: %s", url)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=self.headless)
+            context = browser.new_context(
+                user_agent=self.ua.random,
+                viewport={"width": 1280, "height": 900},
+                locale="en-GB",
+                extra_http_headers={
+                    "Accept-Language": "en-GB,en;q=0.9",
+                    "DNT": "1",
+                }
+            )
+            page = context.new_page()
+            # FIXED: Apply stealth to bypass bot detection (Anubis, etc.)
+            Stealth().apply_stealth_sync(page)
+            try:
+                # Step 1: Warm up on the homepage first (mimics a real user)
+                if url != self.base_url:
+                    logger.info("🏠 Warming up on homepage to mimic human behavior: %s", self.base_url)
+                    try:
+                        page.goto(self.base_url, wait_until="domcontentloaded", timeout=self.request_timeout * 1000)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=15000)
+                        except PlaywrightTimeoutError:
+                            pass
+
+                        # Handle Anubis on homepage too
+                        hp_content = page.content()
+                        if self._is_anubis_page(hp_content):  # FIXED: use multi-signal helper
+                            self._wait_for_anubis_to_clear(page, timeout_ms=60000)  # FIXED: 60s timeout
+
+                        # Brief human-like pause before navigating to target
+                        page.wait_for_timeout(random.randint(1500, 3000))
+                    except Exception as warmup_err:
+                        logger.warning("Homepage warmup failed (non-fatal): %s", warmup_err)
+
+                # Step 2: Navigate to the actual target URL
+                logger.info("🎯 Navigating to target property page: %s", url)
+                page.goto(url, wait_until="domcontentloaded", timeout=self.request_timeout * 1000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=20000)
+                except PlaywrightTimeoutError:
+                    logger.debug("Direct fetch: networkidle timeout — continuing anyway")
+
+                # FIXED: check for Anubis FIRST, then wait for it to clear before confirming SVGs
+                content = page.content()
+                if self._is_anubis_page(content):  # FIXED: use multi-signal helper
+                    cleared = self._wait_for_anubis_to_clear(page, timeout_ms=60000)  # FIXED: 60s timeout
+                    if cleared:  # FIXED: human-like pause after challenge clears
+                        page.wait_for_timeout(random.randint(1500, 3000))
+                    content = page.content()
+
+                # FIXED: confirm real data SVGs are present after Anubis has cleared
+                try:
+                    page.wait_for_selector("svg.circular-chart", timeout=20000)
+                    logger.info("✅ SVG charts confirmed — real page loaded.")
+                except Exception:
+                    logger.warning("⚠️  SVG charts not found — page may be partial.")
+
+                content = page.content()
+                return content
+            finally:
+                browser.close()
+
+
+    def _do_fetch_with_proxy(self, url: str) -> str:
+        """
+        FIXED: Extracted from fetch_page — runs the proxy-based Playwright fetch
+        with tenacity retry. Raises on exhaustion so fetch_page can fall back to direct.
+        """
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+        proxy_auth_failures = 0
+
         @retry(
             stop=stop_after_attempt(self.max_retries),
-            wait=wait_exponential(multiplier=2, min=15, max=90),
+            wait=wait_exponential(multiplier=1, min=5, max=30),
             retry=(
-                retry_if_exception_type(TooManyRequestsError) | 
-                retry_if_exception_type(ProxyFailedError) | 
-                retry_if_exception_type(requests.Timeout)
+                retry_if_exception_type(ProxyFailedError) |
+                retry_if_exception_type(PlaywrightTimeoutError)
             ),
             before_sleep=before_sleep_log(logger, logging.INFO),
             reraise=True
         )
         def _do_fetch():
-            proxy = self._get_random_proxy()
-            _session = session if session else self._build_session(proxy)
+            nonlocal proxy_auth_failures
+            proxy_dict = self._get_random_proxy()
 
-            # 1. Warm up session
-            if url != self.base_url:
+            pw_proxy: dict | None = None
+            if "http" in proxy_dict:
+                from urllib.parse import urlparse
+                parsed = urlparse(proxy_dict["http"])
+                pw_proxy = {
+                    "server": f"{parsed.hostname}:{parsed.port}",
+                    "username": parsed.username or "",
+                    "password": parsed.password or "",
+                }
+
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=self.headless)
+                context = browser.new_context(
+                    proxy=pw_proxy,  # type: ignore
+                    user_agent=self.ua.random,
+                    viewport={"width": 1280, "height": 900}
+                )
+                page = context.new_page()
+                # FIXED: Apply stealth to bypass bot detection
+                Stealth().apply_stealth_sync(page)
                 try:
-                    logger.info(f"Warming up session on homepage for proxy {proxy['_label']}")
-                    _session.get(self.base_url, timeout=self.request_timeout)
-                    time.sleep(random.uniform(2, 5))
-                except Exception as e:
-                    raise ProxyFailedError(f"Warmup failed: {e}")
+                    logger.info("🌐 [Proxy %s] Navigating to %s", proxy_dict['_label'], url)
+                    try:
+                        response = page.goto(
+                            url, wait_until="domcontentloaded",
+                            timeout=self.request_timeout * 1000
+                        )
+                    except Exception as nav_err:
+                        err_str = str(nav_err)
+                        proxy_auth_failures += 1
+                        logger.warning(
+                            "Proxy %s navigation failed (total failures: %d): %s",
+                            proxy_dict['_label'], proxy_auth_failures, err_str[:150]
+                        )
+                        raise ProxyFailedError(f"Proxy nav error: {nav_err}")
 
-            # 2. Human-like delay
-            delay = random.uniform(self.min_delay, self.max_delay)
-            logger.info(f"Natural delay: {delay:.2f}s...")
-            time.sleep(delay)
+                    if response and response.status == 429:
+                        raise ProxyFailedError("Rate limited via proxy")
+                    if response and response.status == 403:
+                        raise ProxyFailedError("403 via proxy")
 
-            # 3. Main request
-            try:
-                response = _session.get(url, timeout=self.request_timeout)
-            except (requests.exceptions.ProxyError, requests.exceptions.ConnectTimeout) as e:
-                raise ProxyFailedError(f"Proxy error: {e}")
-            except requests.exceptions.RequestException as e:
-                raise
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                    except PlaywrightTimeoutError:
+                        logger.debug("Networkidle timeout — continuing anyway")
 
-            # 4. Status checks
-            if response.status_code == 429:
-                raise TooManyRequestsError("Rate limited")
-            
-            if response.status_code == 403:
-                raise ScraperBlockedError("403 Blocked")
+                    content = page.content()
 
-            content_lower = response.text.lower()
-            if "cf-browser-verification" in content_lower or "ray id" in content_lower:
-                raise ScraperBlockedError("Cloudflare challenge")
+                    if self._is_anubis_page(content):
+                        cleared = self._wait_for_anubis_to_clear(page, timeout_ms=60000)
+                        if not cleared or self._is_anubis_page(page.content()):
+                            raise ProxyFailedError("Anubis persists through proxy — rotating")
 
-            return response
+                        try:
+                            page.wait_for_selector("svg.circular-chart", timeout=15000)
+                        except Exception:
+                            logger.warning("SVGs not found after Anubis cleared — content may be partial")
+
+                        page.wait_for_timeout(random.randint(800, 2000))
+                        content = page.content()
+
+                    if "cf-browser-verification" in content.lower():
+                        raise ProxyFailedError("Cloudflare JS challenge via proxy")
+
+                    return content
+                finally:
+                    browser.close()
 
         return _do_fetch()
+
+    def fetch_page(self, url: str) -> str:
+        """
+        FIXED: Direct (no-proxy) mode is now the primary path.
+        Proxy mode is only used when self.proxy_pool is non-empty, with direct as fallback.
+        """
+        if not self.proxy_pool:
+            # FIXED: No proxies configured — go direct immediately (was: try proxies first)
+            logger.info("📡 Direct mode: fetching %s", url)
+            return self._fetch_direct_playwright(url)
+        else:
+            # FIXED: Proxy mode — try proxies with retry, fall back to direct on total failure
+            try:
+                return self._do_fetch_with_proxy(url)
+            except Exception as exc:
+                logger.warning("⚠️  All proxies failed. Falling back to direct. Error: %s", exc)
+                return self._fetch_direct_playwright(url)
+
 
     # ── PERSISTENCE ──────────────────────────────────────────────────────────────
 
@@ -226,7 +406,7 @@ class MousePriceScraper:
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(html_content)
         
-        logger.info(f"HTML saved: {file_path}")
+        logger.info(f"💾 HTML content persisted to local cache: {file_path}")
         return file_path
 
     def _save_screenshot(self, html_file_path: Path, label: str) -> Optional[str]:
@@ -252,7 +432,7 @@ class MousePriceScraper:
                 browser.close()
 
             screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, screenshot_name)
-            logger.info("Screenshot uploaded to S3: %s", screenshot_url)
+            logger.info("📸 Page screenshot captured and uploaded to S3: %s", screenshot_url)
             return screenshot_url
 
         except Exception as e:
@@ -283,7 +463,7 @@ class MousePriceScraper:
                 )
 
         # Check if we landed back on the homepage (no postcode in title)
-        title = soup.title.string.strip().lower() if soup.title else ""
+        title = (soup.title.string or "").strip().lower() if soup.title else ""
         if "house prices" in title and "in" not in title:
             return True, (
                 "The postcode page was not found — Mouseprice redirected to the homepage. "
@@ -298,14 +478,15 @@ class MousePriceScraper:
     def scrape_homepage(self) -> Dict[str, Any]:
         """Scrapes metadata from the homepage."""
         logger.info("Scraping homepage...")
-        response = self.fetch_page(self.base_url)
-        soup = BeautifulSoup(response.text, "html.parser")
+        html_content = self.fetch_page(self.base_url)
+        soup = BeautifulSoup(html_content, "html.parser")
         
-        title = soup.title.string.strip() if soup.title else "N/A"
+        title = (soup.title.string or "").strip() if soup.title else "N/A"
         desc = soup.find("meta", attrs={"name": "description"})
-        meta_desc = desc.get("content", "").strip() if desc else ""
+        meta_content = desc.get("content", "") if desc else ""
+        meta_desc = "".join(meta_content).strip() if isinstance(meta_content, list) else meta_content.strip() if meta_content else ""
         
-        html_file = self.save_html(response.text, "homepage")
+        html_file = self.save_html(html_content, "homepage")
         return {"title": title, "meta_description": meta_desc, "html_file": str(html_file)}
 
     # ── PARSING HELPERS ───────────────────────────────────────────────────────
@@ -393,47 +574,60 @@ class MousePriceScraper:
         encoded_pc = clean_pc.replace(" ", "+")
         url = f"{self.base_url}/house-prices/{encoded_pc}/"
         
-        logger.info(f"Scraping postcode: {postcode}")
-        response = self.fetch_page(url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        file_label = clean_pc.replace(" ", "")
-        html_file = self.save_html(response.text, f"postcode_{file_label}")
+        logger.info(f"🔍 Scraping postcode: {postcode}")
+        try:
+            html_content = self.fetch_page(url)
+            soup = BeautifulSoup(html_content, "html.parser")
+            file_label = clean_pc.replace(" ", "")
+            html_file = self.save_html(html_content, f"postcode_{file_label}")
 
-        # Take a screenshot of the locally-rendered page (no Cloudflare risk)
-        screenshot_url = self._save_screenshot(html_file, file_label)
+            # Take a screenshot of the locally-rendered page (no Cloudflare risk)
+            screenshot_url = self._save_screenshot(html_file, file_label)
 
-        # Detect no-results / redirect-to-homepage conditions
-        no_results, no_results_reason = self._detect_no_results(soup)
+            # Detect no-results / redirect-to-homepage conditions
+            no_results, no_results_reason = self._detect_no_results(soup)
 
-        if no_results:
-            logger.warning(f"No results for {postcode}: {no_results_reason}")
+            if no_results:
+                logger.warning(f"⚠️  No results for {postcode}: {no_results_reason}")
+                return {
+                    "postcode": postcode,
+                    "number_of_sales": "N/A",
+                    "average_price": "N/A",
+                    "avg_psqm": "N/A",
+                    "parse_success": False,
+                    "no_results": True,
+                    "no_results_reason": no_results_reason,
+                    "url": url,
+                    "html_file": str(html_file),
+                    "screenshot_url": screenshot_url,
+                }
+
+            summary = self.parse_postcode_summary(soup)
+
             return {
                 "postcode": postcode,
-                "number_of_sales": "N/A",
-                "average_price": "N/A",
-                "avg_psqm": "N/A",
-                "parse_success": False,
-                "no_results": True,
-                "no_results_reason": no_results_reason,
+                "number_of_sales": summary["number_of_sales"],
+                "average_price": summary["average_price"],
+                "avg_psqm": summary["avg_psqm"],
+                "parse_success": summary["parse_success"],
+                "no_results": False,
+                "no_results_reason": "",
                 "url": url,
                 "html_file": str(html_file),
                 "screenshot_url": screenshot_url,
             }
-
-        summary = self.parse_postcode_summary(soup)
-
-        return {
-            "postcode": postcode,
-            "number_of_sales": summary["number_of_sales"],
-            "average_price": summary["average_price"],
-            "avg_psqm": summary["avg_psqm"],
-            "parse_success": summary["parse_success"],
-            "no_results": False,
-            "no_results_reason": "",
-            "url": url,
-            "html_file": str(html_file),
-            "screenshot_url": screenshot_url,
-        }
+        except Exception as e:
+            import traceback
+            err_msg = f"Error scraping postcode {postcode}: {str(e)}"
+            logger.error(f"❌ {err_msg}\n{traceback.format_exc()}")
+            return {
+                "postcode": postcode,
+                "error": str(e),
+                "parse_success": False,
+                "status": "error",
+                "message": err_msg,
+                "traceback": traceback.format_exc()
+            }
 
     def scrape_property_detail(self, property_url: str) -> Dict[str, Any]:
         """
@@ -449,7 +643,7 @@ if __name__ == "__main__":
     # Setup logging for standalone execution
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
             logging.FileHandler("mouseprice_scraper.log", encoding="utf-8"),
             logging.StreamHandler()
@@ -457,14 +651,14 @@ if __name__ == "__main__":
     )
     
     try:
-        scraper = MousePriceScraper(proxy_file="webshare_proxies.txt")
+        scraper = MousePriceScraper(headless=False)  # FIXED: headless=False for visual debugging
         
         print("\n--- Testing Homepage ---")
         hp = scraper.scrape_homepage()
         print(json.dumps(hp, indent=2))
         
-        print("\n--- Testing Postcode (W1T 4JT) ---")
-        pc = scraper.scrape_postcode("W1T 4JT")
+        print("\n--- Testing Postcode (LN6 9XY) ---")
+        pc = scraper.scrape_postcode("LN6 9XY")
         print(json.dumps(pc, indent=2))
         
     except Exception as e:

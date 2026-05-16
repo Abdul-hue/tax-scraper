@@ -52,7 +52,7 @@ class IDUScraper:
         if headless is None:
             # Check for IDU-specific headless setting first, then global
             env_val = os.getenv("IDU_HEADLESS", os.getenv("HEADLESS", "True")).lower()
-            self.headless = (env_val == "true")
+            self.headless = False # (env_val == "true")
         else:
             self.headless = headless
 

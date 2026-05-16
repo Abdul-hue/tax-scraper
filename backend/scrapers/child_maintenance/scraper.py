@@ -71,7 +71,7 @@ OTHER_CHILDREN_MAP = {
 
 
 class ChildMaintenanceScraper:
-    def __init__(self, config=None, headless: bool = None):
+    def __init__(self, config=None, headless: bool | None = None):
         from dotenv import load_dotenv
         load_dotenv()
         self.config = config
@@ -136,8 +136,8 @@ class ChildMaintenanceScraper:
                 return getattr(obj, key, default)
 
             # Try new flattened structure fields
-            children_count = int(get_val(p, "children_count", 0))
-            children_names = get_val(p, "children_names", [])
+            children_count = int(get_val(p, "children_count") or 0)
+            children_names = get_val(p, "children_names") or []
             overnight_stays = (get_val(p, "overnight_stays", "never") or "never").strip().lower()
             logger.debug(f"Normalizing parent {i+1}: children_count={children_count}, names={children_names}, overnight={overnight_stays}")
             
@@ -154,7 +154,7 @@ class ChildMaintenanceScraper:
                     if c_stay not in OVERNIGHT_LABELS:
                         c_stay = "never"
                     if not c_name and j == 0 and getattr(query, "child_name", ""):
-                        c_name = str(query.child_name).strip()
+                        c_name = getattr(query, "child_name", "").strip()
                     children.append(
                         ChildOvernightStay(
                             name=c_name or f"Child {len(children) + 1}",
@@ -169,7 +169,7 @@ class ChildMaintenanceScraper:
                     if j < len(children_names):
                         name = str(children_names[j]).strip()
                     if not name and j == 0 and getattr(query, "child_name", ""):
-                        name = str(query.child_name).strip()
+                        name = getattr(query, "child_name", "").strip()
                     if not name:
                         name = f"Child {j + 1}"
                     
@@ -211,13 +211,13 @@ class ChildMaintenanceScraper:
             role=role,
             multiple_receiving_parents=bool(getattr(query, "multiple_receiving_parents", False)),
             benefits=accepted,
-            income=float(query.income or 0.0),
+            income=query.income or 0.0,
             income_frequency=frequency,
             add_parent_names=bool(getattr(query, "add_parent_names", False)),
             paying_parent_name=str(getattr(query, "paying_parent_name", "") or "Parent").strip(),
             receiving_parent_name=str(getattr(query, "receiving_parent_name", "") or "Parent").strip(),
             child_name=str(getattr(query, "child_name", "") or "Child").strip(),
-            other_children_in_home=oic_label,  # now "None", "1", "2", or "3 or more"
+            other_children_in_home=oic_label,  # type: ignore # now "None", "1", "2", or "3 or more"
             receiving_parents=clean_parents,
         )
 
@@ -334,7 +334,7 @@ class ChildMaintenanceScraper:
                         input_l = page.locator("input[type='text'], input[type='number'], input.govuk-input").first
                         if input_l.count() > 0:
                             # Fill amount
-                            input_l.fill(f"{float(query.income):.2f}")
+                            input_l.fill(f"{query.income:.2f}")
                             
                             # On some GOV.UK iterations, the frequency is on the exact same page as amount
                             # We can just attempt to click the matching label if present
@@ -822,7 +822,7 @@ class ChildMaintenanceScraper:
         self._click_radio_by_value(page, frequency)
         self._continue(page)
 
-    def _fill_all_child_names(self, page, children: list[ChildOvernightStay], query: ChildMaintenanceQuery = None):
+    def _fill_all_child_names(self, page, children: list[ChildOvernightStay], query: ChildMaintenanceQuery | None = None):
         """
         Fill children's names on the dedicated names page.
         Supports both a single page with multiple inputs and sequential one-name-per-page flows.
