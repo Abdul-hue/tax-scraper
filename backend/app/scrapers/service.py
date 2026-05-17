@@ -193,7 +193,7 @@ async def run_mouseprice_scraper(postcode: str):
 
     def _run_sync():
         headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
-        scraper = MousePriceScraper(headless=headless_mode)
+        scraper = MousePriceScraper(proxy_file="webshare_proxies.txt", headless=headless_mode)
         return scraper.scrape_postcode(postcode)
 
     result = await loop.run_in_executor(None, _run_sync)

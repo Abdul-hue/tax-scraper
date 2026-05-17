@@ -557,6 +557,23 @@ class MousePriceScraper:
                 result["parse_success"] = True
 
         if not result["parse_success"]:
+            import re
+            market_summary = soup.find('h2', string=lambda text: text and 'market summary' in text.lower())
+            if market_summary and market_summary.parent:
+                logger.info("parse_postcode_summary: Found Area market summary. Parsing as an Area page.")
+                text = market_summary.parent.get_text(separator=" ", strip=True)
+                
+                price_match = re.search(r'average price[^\£]*\s*(£[\d,]+)', text)
+                if price_match:
+                    result["average_price"] = price_match.group(1).rstrip(',')
+                    result["parse_success"] = True
+                
+                psqm_match = re.search(r'average price per square metre is currently\s*(£[\d,]+)', text)
+                if psqm_match:
+                    result["avg_psqm"] = psqm_match.group(1).rstrip(',')
+                    result["parse_success"] = True
+
+        if not result["parse_success"]:
             logger.warning(
                 "parse_postcode_summary: no data extracted — HTML structure may have changed. "
                 "Check saved HTML and run debug_chart_svgs() for details."
@@ -651,7 +668,7 @@ if __name__ == "__main__":
     )
     
     try:
-        scraper = MousePriceScraper(headless=False)  # FIXED: headless=False for visual debugging
+        scraper = MousePriceScraper(proxy_file="webshare_proxies.txt", headless=False)  # FIXED: headless=False for visual debugging
         
         print("\n--- Testing Homepage ---")
         hp = scraper.scrape_homepage()
