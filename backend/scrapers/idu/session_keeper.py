@@ -28,14 +28,98 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# How often the keeper checks whether the session is still alive (seconds).
-# Default: every 4 hours.  Tracesmart sessions typically last ~8 h, so
-# refreshing at 4 h gives a comfortable safety margin with no human action.
-REFRESH_INTERVAL_SECONDS = int(os.getenv("IDU_SESSION_REFRESH_HOURS", "4")) * 3600
+
+
+PING_INTERVAL_SECONDS = int(os.getenv("IDU_PING_INTERVAL_MINUTES", "25")) * 60
+SESSION_ACTIVE_WINDOW_SECONDS = int(os.getenv("IDU_SESSION_WINDOW_HOURS", "2")) * 3600
+
+_last_activity: float = 0.0           # unix timestamp of last search()
 
 _keeper_thread: threading.Thread | None = None
 _keeper_stop = threading.Event()
 _keeper_lock  = threading.Lock()
+
+
+def touch_activity() -> None:
+    """Call this every time a real scraper search runs.
+    Resets the 2-hour inactivity window."""
+    global _last_activity
+    _last_activity = time.time()
+    logger.debug("[SessionKeeper] Activity touched at %.0f", _last_activity)
+
+
+def _do_ping_playwright(session_file: str) -> bool:
+    """Lightweight browser-based keep-alive using Playwright."""
+    from playwright.sync_api import sync_playwright
+    from scrapers.idu import session as session_mod
+    from scrapers.common.browser import get_browser_args
+    from app.scrapers.service import _idu_operation_lock
+
+    with _idu_operation_lock:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=get_browser_args())
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                            " AppleWebKit/537.36 (KHTML, like Gecko)"
+                            " Chrome/114.0.0.0 Safari/537.36"),
+            )
+            page = context.new_page()
+            try:
+                loaded = session_mod.load_session(context, session_file)
+                if not loaded:
+                    logger.info("[SessionKeeper] No session file — ping skipped")
+                    return False
+                valid = session_mod.is_session_valid(page, timeout_ms=15000)
+                logger.info("[SessionKeeper] Playwright Ping result: %s", "alive" if valid else "expired")
+                return valid
+            except Exception as e:
+                logger.warning("[SessionKeeper] Playwright Ping error: %s", e)
+                return False
+            finally:
+                try:
+                    page.close(); context.close(); browser.close()
+                except Exception:
+                    pass
+
+
+def _do_ping_requests(session_file: str) -> bool:
+    """Zero-overhead HTTP keep-alive ping using the requests library.
+    Skips browser overhead entirely and does not need the concurrency lock."""
+    import requests
+    import json
+    try:
+        if not os.path.exists(session_file):
+            logger.info("[SessionKeeper] No session file — ping skipped")
+            return False
+
+        state = json.loads(Path(session_file).read_text(encoding="utf-8"))
+        cookies = {c["name"]: c["value"] for c in state.get("cookies", [])}
+        r = requests.get(
+            "https://idu.tracesmart.co.uk/",
+            cookies=cookies,
+            timeout=10,
+            allow_redirects=False,
+        )
+        # If redirected to SSO login, or contains SSO domain in first 500 chars of body, session is dead
+        alive = (
+            r.status_code == 200
+            and "sso.tracesmart" not in r.headers.get("Location", "")
+            and "sso.tracesmart.co.uk" not in r.text[:500]  # catch inline redirects
+        )
+        logger.info("[SessionKeeper] Requests Ping result: %s", "alive" if alive else "expired")
+        return alive
+    except Exception as e:
+        logger.warning("[SessionKeeper] Requests Ping error: %s", e)
+        return False
+
+
+def _do_ping(session_file: str) -> bool:
+    """Keep-alive ping. Supports 'playwright' (default) or 'requests' (zero-overhead)."""
+    method = os.getenv("IDU_PING_METHOD", "playwright").lower()
+    if method == "requests":
+        return _do_ping_requests(session_file)
+    return _do_ping_playwright(session_file)
 
 
 def _do_refresh(username: str, password: str, session_file: str) -> bool:
@@ -52,7 +136,7 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
     with _idu_operation_lock:
         with sync_playwright() as p:
             browser = p.chromium.launch(
-                headless=False, # os.getenv("IDU_HEADLESS", os.getenv("HEADLESS", "True")).lower() == "true",
+                headless=os.getenv("IDU_HEADLESS", os.getenv("HEADLESS", "True")).lower() == "true",
                 args=get_browser_args(),
             )
             context = browser.new_context(
@@ -214,18 +298,39 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
 
 
 def _keeper_loop(username: str, password: str, session_file: str) -> None:
-    """The main loop for the background keeper thread."""
-    # Do an immediate refresh on startup so the session is always fresh
-    _do_refresh(username, password, session_file)
+    # Initial ping on startup
+    touch_activity()   # treat startup as activity so the window opens
 
-    while not _keeper_stop.wait(timeout=REFRESH_INTERVAL_SECONDS):
+    while not _keeper_stop.wait(timeout=PING_INTERVAL_SECONDS):
         if _keeper_stop.is_set():
             break
+
+        now = time.time()
+        inactive_for = now - _last_activity
+
+        if inactive_for > SESSION_ACTIVE_WINDOW_SECONDS:
+            # No search in 2h — session has likely expired. Do nothing.
+            # The next search() call will trigger _ensure_logged_in()
+            # which will call _do_refresh() on its own.
+            logger.info(
+                "[SessionKeeper] Inactive for %.0f min — not pinging. "
+                "Next search will trigger re-login.",
+                inactive_for / 60,
+            )
+            continue
+
+        # Within the active window — send a lightweight ping
         logger.info(
-            "[SessionKeeper] Scheduled refresh (every %.0f h)...",
-            REFRESH_INTERVAL_SECONDS / 3600,
+            "[SessionKeeper] Pinging (inactive for %.0f min)...",
+            inactive_for / 60,
         )
-        _do_refresh(username, password, session_file)
+        alive = _do_ping(session_file)
+
+        if not alive:
+            # Session died unexpectedly — do a full refresh now so the
+            # next search doesn't have to pay the OTP cost
+            logger.warning("[SessionKeeper] Ping failed — triggering full re-login")
+            _do_refresh(username, password, session_file)
 
     logger.info("[SessionKeeper] Stopped.")
 
@@ -282,8 +387,8 @@ def start_session_keeper(
         )
         _keeper_thread.start()
         logger.info(
-            "[SessionKeeper] Started. Refresh interval: every %.0f hours.",
-            REFRESH_INTERVAL_SECONDS / 3600,
+            "[SessionKeeper] Started. Ping interval: every %.0f minutes.",
+            PING_INTERVAL_SECONDS / 60,
         )
 
 

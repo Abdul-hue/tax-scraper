@@ -276,6 +276,9 @@ class IDUScraper:
                         logger.error(f"Failed to re-initialize browser: {reinit_err}")
                         raise
 
+                from scrapers.idu.session_keeper import touch_activity
+                touch_activity()
+
                 self._ensure_logged_in()
                 self.page.goto("https://idu.tracesmart.co.uk/?page=newSearch&searchtype=1", timeout=20000)
                 self.page.wait_for_selector("#forename", timeout=20000)

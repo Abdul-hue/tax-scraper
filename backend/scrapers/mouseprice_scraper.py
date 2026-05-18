@@ -226,6 +226,7 @@ class MousePriceScraper:
                 user_agent=self.ua.random,
                 viewport={"width": 1280, "height": 900},
                 locale="en-GB",
+                ignore_https_errors=True,
                 extra_http_headers={
                     "Accept-Language": "en-GB,en;q=0.9",
                     "DNT": "1",
@@ -322,7 +323,8 @@ class MousePriceScraper:
                 context = browser.new_context(
                     proxy=pw_proxy,  # type: ignore
                     user_agent=self.ua.random,
-                    viewport={"width": 1280, "height": 900}
+                    viewport={"width": 1280, "height": 900},
+                    ignore_https_errors=True
                 )
                 page = context.new_page()
                 # FIXED: Apply stealth to bypass bot detection

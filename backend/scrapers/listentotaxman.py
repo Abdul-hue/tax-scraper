@@ -202,15 +202,13 @@ class ListenToTaxmanScraper:
                 self._page.goto(self.URL, wait_until="domcontentloaded",
                                 timeout=40_000)
                 self._wait_for_form()
+                self._dismiss_popups()
 
                 # ── fill every form field ─────────────────────────────────────
                 self._fill_form(config)
 
                 # ── submit ────────────────────────────────────────────────────
                 self._submit()
-
-                # ── wait for payslip values to be non-zero ────────────────────
-                self._wait_for_results()
 
                 # ── parse ─────────────────────────────────────────────────────
                 # Get HTML from the active frame (main page or iframe)
@@ -264,6 +262,32 @@ class ListenToTaxmanScraper:
         return result
 
     # ── form filling ──────────────────────────────────────────────────────────
+    def _dismiss_popups(self) -> None:
+        """Dismiss cookie/GDPR banners and promotional overlays."""
+        selectors = [
+            'button:has-text("Accept all")',
+            'button:has-text("Accept")',
+            'button:has-text("I agree")',
+            'button:has-text("Agree")',
+            'button:has-text("Got it")',
+            'button:has-text("OK")',
+            '[id*="cookie"] button',
+            '[class*="cookie"] button',
+            '[id*="consent"] button',
+            '[class*="consent"] button',
+            '[id*="onetrust-accept"] ',
+            '.cc-accept',
+            'button.close',
+            'button[aria-label="Close"]'
+        ]
+        for sel in selectors:
+            try:
+                self._page.click(sel, timeout=1_500)
+                logger.debug("Dismissed popup with selector: %s", sel)
+            except Exception:
+                pass
+        self._page.wait_for_timeout(500)
+
     def _wait_for_form(self) -> None:
         """
         Wait until the form is interactive.
@@ -272,7 +296,6 @@ class ListenToTaxmanScraper:
         page = self._page
         # Use domcontentloaded — networkidle times out due to 60+ ad/tracker iframes
         page.wait_for_load_state("domcontentloaded", timeout=self.timeout_ms)
-        page.wait_for_timeout(1500)
 
         # Try all known salary field selectors
         for sel in ['input[name="ingr"]', '#ingr', 'input[type="number"]']:
@@ -361,38 +384,6 @@ class ListenToTaxmanScraper:
         """
         f = self._active_frame
 
-        # Read the CURRENT gross pay value before clicking — to detect change
-        def _get_gross():
-            """Return the first £‑value from the gross pay row.
-
-            The calculator renders the gross pay in multiple columns (year, month,
-            week, etc).  The relevant column depends on the salary period selected
-            and the order of those cells can shift when additional hidden columns
-            are present.  We therefore scan every cell in the row for the first
-            currency string we encounter instead of assuming a fixed index.
-            """
-            try:
-                return f.evaluate("""
-                    () => {
-                        const rows = Array.from(document.querySelectorAll('table tr'));
-                        for (const row of rows) {
-                            if (!row.textContent.includes('Gross Pay')) continue;
-                            const cells = Array.from(row.querySelectorAll('td'));
-                            for (let i = 1; i < cells.length; i++) {
-                                const txt = cells[i].textContent.trim();
-                                if (txt.startsWith('£'))
-                                    return txt;
-                            }
-                        }
-                        return null;
-                    }
-                """)
-            except Exception:
-                return None
-
-        gross_before = _get_gross()
-        logger.debug("Gross Pay before click: %s", gross_before)
-
         # Click via JS — most reliable across headless/headful modes.  The
         # site renders the submit button disabled until the form is valid.  In
         # headless mode the .click() call on a disabled element merely scrolls
@@ -437,63 +428,21 @@ class ListenToTaxmanScraper:
         logger.info("Button clicked — waiting for results to update...")
 
         # Wait for the result values to change from £0 to real figures
-        # Poll up to 15 seconds
-        import time
-        for i in range(30):
-            time.sleep(0.5)
-            gross_after = _get_gross()
-            logger.debug("Poll %d — Gross Pay: %s", i, gross_after)
-            if gross_after and gross_after != gross_before and gross_after != "£0" and gross_after != "£0.00":
-                logger.info("Results updated — Gross Pay: %s", gross_after)
-                return
-
-        # If values didn't change, page may use AJAX — wait for network quiet
         try:
-            self._page.wait_for_load_state("networkidle", timeout=10_000)
-        except Exception:
-            pass
-        logger.warning("Results may not have updated — proceeding with parse anyway")
-
-
-    def _wait_for_results(self) -> None:
-        """
-        Wait until the payslip table has real values (not all £0).
-        Takes a screenshot mid-wait for debugging if values stay zero.
-        """
-        import time
-        f = self._active_frame
-
-        # Wait for Net Wage text to be present first
-        for sel in ['text=Net Wage', 'text=Gross Pay', 'text=Your Payslip']:
-            try:
-                f.wait_for_selector(sel, state="visible", timeout=10_000)
-                break
-            except Exception:
-                continue
-
-        # Then poll until the gross-pay row itself contains a non-zero
-        # amount.  The previous implementation scanned the whole page; various
-        # adverts and non‑related elements may contain currency symbols which
-        # could fool the check and make us give up early.
-        for i in range(20):
-            time.sleep(0.5)
-            has_real_value = f.evaluate("""
+            f.wait_for_function("""
                 () => {
                     const row = document.querySelector('#row-gross-pay');
                     if (!row) return false;
                     const cells = Array.from(row.querySelectorAll('td'));
                     return cells.some(td => {
                         const t = td.textContent.trim();
-                        return /^£(?!0(?:\\.00)?$)/.test(t);
+                        return /^£(?!0(\\.00)?$)/.test(t);
                     });
                 }
-            """)
-            if has_real_value:
-                logger.info("Payslip values confirmed non-zero after %d polls", i+1)
-                return
-            logger.debug("Poll %d — gross row still £0", i+1)
-
-        logger.warning("Payslip values are still £0 after polling — scraping anyway")
+            """, timeout=15_000)
+            logger.info("Results updated — Gross Pay confirmed non-zero")
+        except Exception as e:
+            logger.warning("Payslip values may not have updated or timed out: %s", e)
 
 
     # ── form element helpers ─────────────────────────────────────────────────

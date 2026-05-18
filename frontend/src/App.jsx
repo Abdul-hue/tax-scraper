@@ -16,7 +16,7 @@ function App() {
 
     const [postcode, setPostcode] = useState('LS278RR')
     const [plate, setPlate] = useState('BD51SMM')
-    const [mousepricePostcode, setMousepricePostcode] = useState('SW1A 1AA')
+    const [mousepricePostcode, setMousepricePostcode] = useState('LN6 9XY')
 
     const [hpiData, setHpiData] = useState({
         locationMode: 'optionRegion', region: 'Greater London', postcode: '',
@@ -977,12 +977,13 @@ function App() {
                         {activeTab === 'taxman' && (
                             <div>
                                 <table>
-                                    <thead><tr><th>Label</th><th>Yearly</th><th>Monthly</th></tr></thead>
+                                    <thead><tr><th>Label</th><th>Yearly</th><th>Monthly</th><th>Weekly</th></tr></thead>
                                     <tbody>
                                         {result.payslip?.slice(1).map((row, idx) => (
                                             <tr key={idx}>
                                                 <td>{row.label}</td><td>{row.yearly}</td>
                                                 <td style={{ color: row.label === 'Net Wage' ? '#58a6ff' : '' }}>{row.monthly}</td>
+                                                <td style={{ color: row.label === 'Net Wage' ? '#58a6ff' : '' }}>{row.weekly}</td>
                                             </tr>
                                         ))}
                                     </tbody>

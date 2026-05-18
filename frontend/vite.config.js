@@ -5,17 +5,17 @@ export default defineConfig({
     plugins: [react()],
     server: {
         port: 3412,
-        // Proxy is only used in local dev — in production, nginx routes /api to FastAPI on 7887
+        // Proxy is only used in local dev — in production, nginx routes /api to FastAPI on 8000
         proxy: {
             '/api': {
-                target: 'http://localhost:7887',
+                target: 'http://localhost:8000',
                 changeOrigin: true,
                 rewrite: (path) => path.replace(/^\/api/, ''),
                 timeout: 120000,
                 proxyTimeout: 120000,
             },
             '/static': {
-                target: 'http://localhost:7887',
+                target: 'http://localhost:8000',
                 changeOrigin: true,
             }
         }
