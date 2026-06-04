@@ -451,9 +451,13 @@ function App() {
                             <div className="form-group">
                                 <label>Student Loan</label>
                                 <select className="input-field" value={taxData.student_loan} onChange={e => updateTaxData('student_loan', e.target.value)}>
-                                    <option value="No">No Student Loan</option><option value="Plan 1">Plan 1</option>
-                                    <option value="Plan 2">Plan 2</option><option value="Plan 4">Plan 4 (Scottish)</option>
+                                    <option value="No">No Student Loan</option>
+                                    <option value="Plan 1">Plan 1</option>
+                                    <option value="Plan 2">Plan 2</option>
+                                    <option value="Plan 4">Plan 4</option>
+                                    <option value="Plan 5">Plan 5</option>
                                     <option value="Postgraduate">Postgraduate</option>
+                                    <option value="Scottish">Scottish</option>
                                 </select>
                             </div>
                             <div className="form-group checkbox-group" style={{ gridColumn: 'span 2' }}>

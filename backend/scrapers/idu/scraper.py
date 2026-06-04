@@ -13,6 +13,7 @@ from .models import IDUConfig, IDUResult, PEPEntry
 from . import session as session_mod
 from . import parser as parser_mod
 from ..common.browser import get_browser_args
+from .address_match import NoAddressMatchError, match_address_link
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,33 @@ class IDUScraper:
             logger.exception("Error during login flow")
             raise
 
+    def _click_address_match_link(self, house: str, postcode: str) -> None:
+        """Find and click the correct address link in IDU's #addressmatch list.
+
+        Delegates matching to :func:`match_address_link` which uses exact then
+        token-based matching with an alphanumeric-suffix rule — preventing "1"
+        from matching "10", "11", "21", etc.
+
+        IDU stores the selected address internally by link id; #house/#street/#town
+        remain empty after selection — this is expected behaviour.
+        """
+        self.page.wait_for_selector("#addressmatch a", timeout=10000)
+
+        links = self.page.eval_on_selector_all(
+            "#addressmatch a",
+            "els => els.map(e => ({text: e.textContent.trim()}))",
+        )
+
+        best_idx, best_link = match_address_link(house, links)
+        logger.info("Address match: clicking link %d %r", best_idx, best_link["text"])
+        self.page.locator("#addressmatch a").nth(best_idx).click()
+
+        self.page.wait_for_selector("#confirm-yes", timeout=10000)
+        try:
+            self.page.check("#confirm-yes")
+        except Exception:
+            self.page.click("#confirm-yes")
+
     def search(self, config: IDUConfig, screenshot: bool = False) -> IDUResult:
         """Run a single search for the provided config."""
         last_exc: Optional[Exception] = None
@@ -300,13 +328,12 @@ class IDUScraper:
                     except Exception:
                         # try by value
                         self.page.select_option("#gender", value=config.gender)
-                # address fields
-                if config.house:
-                    self.page.fill("#house", config.house)
-                if config.street:
-                    self.page.fill("#street", config.street)
-                if config.town:
-                    self.page.fill("#town", config.town)
+                # address fields — clear house/street/town before Find Address;
+                # IDU returns zero results if those fields are pre-filled.
+                # The house value is used only for matching the pd-addresslink list.
+                self.page.fill("#house", "")
+                self.page.fill("#street", "")
+                self.page.fill("#town", "")
                 if config.postcode:
                     self.page.fill("#postcode", config.postcode)
                 # contacts
@@ -324,25 +351,19 @@ class IDUScraper:
                     self.page.fill("#landline2", config.landline2)
 
                 self.page.click("#addchk")
-                # wait for addressmatch link or text
-                try:
-                    self.page.wait_for_selector("#addressmatch a", timeout=10000)
-                    self.page.click("#addressmatch a")
-                except Exception:
-                    # if no link, try confirming available text
+                if config.house:
                     try:
-                        self.page.wait_for_selector("#addressmatch", timeout=10000)
+                        self._click_address_match_link(config.house, config.postcode or "")
+                    except NoAddressMatchError:
+                        raise
                     except Exception:
                         logger.info("No addressmatch found; continuing")
-
-                try:
-                    self.page.check("#confirm-yes")
-                except Exception:
-                    # try clicking if not checkable
+                else:
                     try:
-                        self.page.click("#confirm-yes")
+                        self.page.wait_for_selector("#addressmatch", timeout=10000)
+                        logger.info("addressmatch appeared but no house configured — skipping link selection")
                     except Exception:
-                        pass
+                        logger.info("No addressmatch found; continuing")
 
                 self.page.click("#inputbut")
                 

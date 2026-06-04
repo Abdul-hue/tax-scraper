@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # ── ListenToTaxman Models ──────────────────────────────────────────────────
 SalaryPeriod = Literal["year", "month", "4weeks", "2weeks", "week", "day", "hour"]
 PensionType  = Literal["£", "%"]
-StudentLoan  = Literal["No", "Plan 1", "Plan 2", "Plan 4", "Postgraduate"]
+StudentLoan  = Literal["No", "Plan 1", "Plan 2", "Plan 4", "Plan 5", "Postgraduate", "Scottish"]
 AgeGroup     = Literal["under 65", "65-74", "75 and over"]
 Region       = Literal["UK", "Scotland"]
 
