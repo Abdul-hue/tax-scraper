@@ -140,12 +140,8 @@ class LandRegistryScraper:
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
                         "--disable-software-rasterizer",
-                        "--incognito",
                     ],
                     "ignore_default_args": ["--enable-automation"],
-                    "accept_downloads": True,
-                    # Match user agent to Windows Chrome to avoid TLS mismatch
-                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 }
 
                 # Use real Chrome only on Windows (Docker/Linux only has Chromium)
@@ -156,13 +152,19 @@ class LandRegistryScraper:
 
                 try:
                     browser = p.chromium.launch(**launch_args)
-                    context = browser.new_context()
+                    context = browser.new_context(
+                        accept_downloads=True,
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                    )
                     print("[LR-DEBUG] Browser launched successfully!", flush=True)
                 except Exception as e:
                     print(f"[LR-DEBUG] Browser launch FAILED: {e}. Retrying...", flush=True)
                     _time.sleep(2)
                     browser = p.chromium.launch(**launch_args)
-                    context = browser.new_context()
+                    context = browser.new_context(
+                        accept_downloads=True,
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                    )
                     print("[LR-DEBUG] Browser launched on retry!", flush=True)
 
                 page = context.new_page()
