@@ -214,21 +214,34 @@ class LandRegistryScraper:
                     pg.wait_for_timeout(random.randint(200, 500))
                     print("[LR-DEBUG] LOGIN: Clicking Sign In...", flush=True)
                     sign_in.click()
-                    pg.wait_for_load_state("networkidle", timeout=30000)
-                    pg.wait_for_timeout(8000)
-                    print(f"[LR-DEBUG] LOGIN: After sign in. URL={pg.url}", flush=True)
-
+                    
+                    # Just wait a fixed time, don't rely on flaky networkidle
+                    pg.wait_for_timeout(10000)
+                    
+                    # Try to get URL/title, but don't crash if it fails
+                    try:
+                        current_url = pg.url
+                        print(f"[LR-DEBUG] LOGIN: After sign in. URL={current_url}", flush=True)
+                    except Exception as e:
+                        print(f"[LR-DEBUG] LOGIN: Could not get URL: {e}", flush=True)
+                    
                     # Take a debug screenshot to see what the page looks like
-                    print("[LR-DEBUG] LOGIN: Taking debug screenshot...", flush=True)
-                    self._take_error_screenshot(pg, "landregistry_after_login_click")
+                    try:
+                        print("[LR-DEBUG] LOGIN: Taking debug screenshot...", flush=True)
+                        self._take_error_screenshot(pg, "landregistry_after_login_click")
+                    except Exception as e:
+                        print(f"[LR-DEBUG] LOGIN: Could not take screenshot: {e}", flush=True)
 
                     # Check for Cloudflare challenge after login too!
-                    print("[LR-DEBUG] LOGIN: Checking for Cloudflare after login...", flush=True)
-                    current_title = pg.title().lower()
-                    current_url = pg.url
-                    if 'just a moment' in current_title or '__cf_chl' in current_url or 'challenge' in current_title:
-                        print("[LR-DEBUG] LOGIN: Cloudflare challenge detected after login!", flush=True)
-                        self._wait_for_cloudflare(pg, max_wait=60)
+                    try:
+                        print("[LR-DEBUG] LOGIN: Checking for Cloudflare after login...", flush=True)
+                        current_title = pg.title().lower()
+                        current_url = pg.url
+                        if 'just a moment' in current_title or '__cf_chl' in current_url or 'challenge' in current_title:
+                            print("[LR-DEBUG] LOGIN: Cloudflare challenge detected after login!", flush=True)
+                            self._wait_for_cloudflare(pg, max_wait=60)
+                    except Exception as e:
+                        print(f"[LR-DEBUG] LOGIN: Cloudflare check failed: {e}", flush=True)
 
                     # Handle "already signed in somewhere else" - simplified version
                     try:
@@ -244,20 +257,29 @@ class LandRegistryScraper:
                         logger.warning(f"pkmsdisplace redirect failed: {e}")
                         print(f"[LR-DEBUG] LOGIN: pkmsdisplace failed but continuing: {e}", flush=True)
 
-                    # Verify login succeeded - with more debugging
+                    # Verify login succeeded - with more debugging and robustness
                     print("[LR-DEBUG] LOGIN: Waiting for login to complete...", flush=True)
                     login_success = False
                     for i in range(90):
-                        current_url = pg.url
-                        print(f"[LR-DEBUG] LOGIN: Wait {i+1}s - URL={current_url}", flush=True)
-                        if "pkmslogin" not in current_url and ("/eservices/" in current_url or "portal" in pg.title().lower()):
-                            login_success = True
-                            break
+                        try:
+                            current_url = pg.url
+                            current_title = pg.title().lower()
+                            print(f"[LR-DEBUG] LOGIN: Wait {i+1}s - URL={current_url}, title={current_title}", flush=True)
+                            
+                            if "pkmslogin" not in current_url and ("/eservices/" in current_url or "portal" in current_title):
+                                login_success = True
+                                break
+                        except Exception as e:
+                            print(f"[LR-DEBUG] LOGIN: Error checking URL/title: {e}", flush=True)
+                        
                         pg.wait_for_timeout(1000)
 
                     if not login_success:
                         print(f"[LR-DEBUG] LOGIN: Login failed - still on pkmslogin URL after 90s", flush=True)
-                        self._take_error_screenshot(pg, "landregistry_login_failed")
+                        try:
+                            self._take_error_screenshot(pg, "landregistry_login_failed")
+                        except Exception as e:
+                            print(f"[LR-DEBUG] LOGIN: Could not take error screenshot: {e}", flush=True)
                         raise Exception("Login failed — check username and password or IP address")
 
                     print("[LR-DEBUG] LOGIN: Login successful!", flush=True)
