@@ -47,11 +47,13 @@ from app.core.s3 import upload_screenshot_to_s3_sync
 logger = logging.getLogger(__name__)
 
 # ── literal types (mirrors every dropdown on the form) ────────────────────────
-SalaryPeriod = Literal["year", "month", "4weeks", "2weeks", "week", "day", "hour"]
-PensionType  = Literal["£", "%"]
-StudentLoan  = Literal["No", "Plan 1", "Plan 2", "Plan 4", "Plan 5", "Postgraduate", "Scottish"]
-AgeGroup     = Literal["under 65", "65-74", "75 and over"]
-Region       = Literal["UK", "Scotland"]
+SalaryPeriod   = Literal["year", "month", "4weeks", "2weeks", "week", "day", "hour"]
+PensionType    = Literal["£", "%"]
+PensionRelief  = Literal["Net", "RAS"]
+StudentLoan    = Literal["No", "Plan 1", "Plan 2", "Plan 4", "Plan 5", "Postgraduate", "Scottish"]
+AgeGroup       = Literal["under 65", "65-74", "75 and over"]
+Region         = Literal["UK", "Scotland", "England", "Wales", "Northern Ireland"]
+NILetter       = Literal["A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "S", "V", "X", "Z"]
 
 
 # ── input model ───────────────────────────────────────────────────────────────
@@ -61,19 +63,22 @@ class ScrapeConfig:
     One field per form input visible on listentotaxman.com.
     Defaults mirror the site's own default values.
     """
-    salary:         int          = 2200
-    salary_period:  SalaryPeriod = "month"
-    tax_year:       str          = "2025/26"
-    region:         Region       = "UK"
-    age:            AgeGroup     = "under 65"
-    student_loan:   StudentLoan  = "No"
-    pension_amount: float        = 0   # default now zero (was 5)
-    pension_type:   PensionType  = "£"
-    allowances:     float        = 0
-    tax_code:       str          = ""
-    married:        bool         = False
-    blind:          bool         = False
-    no_ni:          bool         = False
+    salary:          int           = 2200
+    salary_period:   SalaryPeriod  = "month"
+    tax_year:        str           = "2025/26"
+    region:          Region        = "UK"
+    age:             AgeGroup      = "under 65"
+    ni_letter:       NILetter      = "A"
+    student_loan:    StudentLoan   = "No"
+    pension_amount:  float         = 0
+    pension_type:    PensionType   = "£"
+    pension_relief:  PensionRelief = "Net"
+    rental_income:   float         = 0
+    allowances:      float         = 0
+    tax_code:        str           = ""
+    married:         bool          = False
+    blind:           bool          = False
+    no_ni:           bool          = False
 
 
 # ── payslip row ───────────────────────────────────────────────────────────────
@@ -325,12 +330,15 @@ class ListenToTaxmanScraper:
           married        → married checkbox
           blind          → blind checkbox
           exNI           → I pay no NI checkbox
+          NI             → NI letter dropdown
           plan           → student loan dropdown
           age            → age dropdown
+          rent           → rental income input
           add            → allowances / deductions input
           code           → tax code input
           #pension-prepend → pension type select (£ / %)
           pension        → pension amount input
+          #pension-append  → pension relief select (Net / RAS)
           ingr           → salary amount input
           time           → salary period dropdown
         """
@@ -348,31 +356,43 @@ class ListenToTaxmanScraper:
         self._checkbox(f, ['input[name="blind"]',   '#blind'],   cfg.blind)
         self._checkbox(f, ['input[name="exNI"]',    '#exNI'],    cfg.no_ni)
 
-        # 4. Student loan
+        # 4. NI Letter
+        self._select(f, ['select[name="NI"]', '#NI', 'select[name="NILetter"]'], cfg.ni_letter)
+
+        # 5. Student loan
         self._select(f, ['select[name="plan"]', '#plan'], cfg.student_loan)
 
-        # 5. Age
+        # 6. Age
         self._select(f, ['select[name="age"]', '#age'], cfg.age)
 
-        # 6. Allowances / deductions
+        # 7. Rental income
+        if cfg.rental_income:
+            self._fill(f, ['input[name="rent"]', '#rent', 'input[name="rental"]'],
+                       str(int(cfg.rental_income)))
+
+        # 8. Allowances / deductions
         self._fill(f, ['input[name="add"]', '#add'],
                    str(int(cfg.allowances)) if cfg.allowances else "0")
 
-        # 7. Tax code (optional)
+        # 9. Tax code (optional)
         if cfg.tax_code:
             self._fill(f, ['input[name="code"]', '#code'], cfg.tax_code)
 
-        # 8. Pension type (£ / %) — select by id since name is empty
+        # 10. Pension type (£ / %)
         self._select(f, ['#pension-prepend', 'select[id="pension-prepend"]'],
                      cfg.pension_type)
 
-        # 9. Pension amount
+        # 11. Pension amount
         self._fill(f, ['input[name="pension"]', '#pension'], str(cfg.pension_amount))
 
-        # 10. Salary amount
+        # 12. Pension relief (Net / RAS)
+        self._select(f, ['#pension-append', 'select[id="pension-append"]', 'select[name="RAS"]'],
+                     cfg.pension_relief)
+
+        # 13. Salary amount
         self._fill(f, ['input[name="ingr"]', '#ingr'], str(cfg.salary))
 
-        # 11. Salary period
+        # 14. Salary period
         self._select(f, ['select[name="time"]', '#time'], cfg.salary_period)
 
         logger.debug("Form filled successfully.")

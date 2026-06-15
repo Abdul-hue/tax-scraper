@@ -32,9 +32,12 @@ async def get_tax_valuation(
     tax_year: str = "2025/26",
     region: str = "UK",
     age: str = "under 65",
+    ni_letter: str = "A",
     student_loan: str = "No",
     pension_amount: float = 0,
     pension_type: str = "£",
+    pension_relief: str = "Net",
+    rental_income: float = 0,
     allowances: float = 0,
     tax_code: str = "",
     married: bool = False,
@@ -47,7 +50,9 @@ async def get_tax_valuation(
     import urllib.parse
     tax_year = urllib.parse.unquote(tax_year)
     age = urllib.parse.unquote(age)
+    ni_letter = urllib.parse.unquote(ni_letter)
     pension_type = urllib.parse.unquote(pension_type)
+    pension_relief = urllib.parse.unquote(pension_relief)
     period = urllib.parse.unquote(period)
     region = urllib.parse.unquote(region)
     student_loan = urllib.parse.unquote(student_loan)
@@ -59,9 +64,12 @@ async def get_tax_valuation(
         tax_year=tax_year,
         region=region,
         age=age,
+        ni_letter=ni_letter,
         student_loan=student_loan,
         pension_amount=pension_amount,
         pension_type=pension_type,
+        pension_relief=pension_relief,
+        rental_income=rental_income,
         allowances=allowances,
         tax_code=tax_code,
         married=married,

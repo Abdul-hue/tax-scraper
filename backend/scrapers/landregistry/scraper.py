@@ -376,7 +376,7 @@ class LandRegistryScraper:
                     try:
                         fname = f"{title_safe}_register_{timestamp}.pdf"
                         file_save_path = os.path.join(DOWNLOAD_DIR, fname)
-                        with page.expect_download(timeout=60000) as dl:
+                        with page.expect_download(timeout=120000) as dl:
                             page.locator("a[href*='ImageServlet'][href*='OC1REG']").first.click()
                         dl.value.save_as(file_save_path)
                         result.register_local_path = f"/api/files/landregistry/{fname}"
@@ -387,12 +387,15 @@ class LandRegistryScraper:
                     except Exception as e:
                         result.error = f"Register PDF download error: {e}"
 
+                # Wait a bit after register download before trying title plan
+                page.wait_for_timeout(2000)
+
                 # Download Title Plan PDF
                 if result.title_plan_url:
                     try:
                         fname = f"{title_safe}_title_plan_{timestamp}.pdf"
                         file_save_path = os.path.join(DOWNLOAD_DIR, fname)
-                        with page.expect_download(timeout=60000) as dl:
+                        with page.expect_download(timeout=120000) as dl:
                             page.locator("a[href*='ImageServlet'][href*='OC1TP']").first.click()
                         dl.value.save_as(file_save_path)
                         result.title_plan_local_path = f"/api/files/landregistry/{fname}"

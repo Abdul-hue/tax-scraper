@@ -57,16 +57,25 @@ class NationwideScraper:
 
                     # Dismiss cookie consent if present
                     try:
-                        page.wait_for_selector("#onetrust-accept-btn-handler", timeout=5000)
+                        page.wait_for_selector("#onetrust-accept-btn-handler", timeout=10000)
                         page.click("#onetrust-accept-btn-handler")
-                        logger.info("Dismissed cookie banner")
+                        page.wait_for_selector(".onetrust-pc-dark-filter", state="hidden", timeout=8000)
+                        logger.info("Dismissed cookie banner and overlay cleared")
                     except Exception:
-                        logger.debug("No cookie banner found or already dismissed")
+                        logger.debug("No cookie banner or overlay already gone")
+
+                    # Force-remove OneTrust SDK from DOM in case overlay persists
+                    page.evaluate("""
+                        const sdk = document.getElementById('onetrust-consent-sdk');
+                        if (sdk) sdk.remove();
+                        const filter = document.querySelector('.onetrust-pc-dark-filter');
+                        if (filter) filter.remove();
+                    """)
 
                     # Location selection: postcode, region, or UK average
                     if query.postcode:
                         # Select Postcode radio
-                        page.click('input[type="radio"][value="optionPostcode"]')
+                        page.click('input[type="radio"][value="optionPostcode"]', force=True)
                         page.wait_for_timeout(500)
                         # Fill postcode input - wait for it to appear after radio click
                         page.wait_for_selector('input[name="postcode"]', timeout=5000)
@@ -74,14 +83,14 @@ class NationwideScraper:
                         page.wait_for_timeout(500)
                     elif query.region and query.region != 'UK':
                         # Select Region radio
-                        page.click('input[type="radio"][value="optionRegion"]')
+                        page.click('input[type="radio"][value="optionRegion"]', force=True)
                         page.wait_for_timeout(500)
                         page.wait_for_selector('select[name="region"]', timeout=5000)
                         page.select_option('select[name="region"]', label=query.region)
                         page.wait_for_timeout(500)
                     else:
                         # Select UK average radio
-                        page.click('input[type="radio"][value="optionUk"]')
+                        page.click('input[type="radio"][value="optionUk"]', force=True)
                         page.wait_for_timeout(500)
 
                     # Fill form fields

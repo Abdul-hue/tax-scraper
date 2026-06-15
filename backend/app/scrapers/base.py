@@ -19,27 +19,32 @@ _executor = ThreadPoolExecutor(max_workers=4)
 logger = logging.getLogger(__name__)
 
 # ── ListenToTaxman Models ──────────────────────────────────────────────────
-SalaryPeriod = Literal["year", "month", "4weeks", "2weeks", "week", "day", "hour"]
-PensionType  = Literal["£", "%"]
-StudentLoan  = Literal["No", "Plan 1", "Plan 2", "Plan 4", "Plan 5", "Postgraduate", "Scottish"]
-AgeGroup     = Literal["under 65", "65-74", "75 and over"]
-Region       = Literal["UK", "Scotland"]
+SalaryPeriod   = Literal["year", "month", "4weeks", "2weeks", "week", "day", "hour"]
+PensionType    = Literal["£", "%"]
+PensionRelief  = Literal["Net", "RAS"]
+StudentLoan    = Literal["No", "Plan 1", "Plan 2", "Plan 4", "Plan 5", "Postgraduate", "Scottish"]
+AgeGroup       = Literal["under 65", "65-74", "75 and over"]
+Region         = Literal["UK", "Scotland", "England", "Wales", "Northern Ireland"]
+NILetter       = Literal["A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "S", "V", "X", "Z"]
 
 @dataclass
 class TaxConfig:
-    salary:         int          = 2200
-    salary_period:  SalaryPeriod = "month"
-    tax_year:       str          = "2025/26"
-    region:         Region       = "UK"
-    age:            AgeGroup     = "under 65"
-    student_loan:   StudentLoan  = "No"
-    pension_amount: float        = 0
-    pension_type:   PensionType  = "£"
-    allowances:     float        = 0
-    tax_code:       str          = ""
-    married:        bool         = False
-    blind:          bool         = False
-    no_ni:          bool         = False
+    salary:          int           = 2200
+    salary_period:   SalaryPeriod  = "month"
+    tax_year:        str           = "2025/26"
+    region:          Region        = "UK"
+    age:             AgeGroup      = "under 65"
+    ni_letter:       NILetter      = "A"
+    student_loan:    StudentLoan   = "No"
+    pension_amount:  float         = 0
+    pension_type:    PensionType   = "£"
+    pension_relief:  PensionRelief = "Net"
+    rental_income:   float         = 0
+    allowances:      float         = 0
+    tax_code:        str           = ""
+    married:         bool          = False
+    blind:           bool          = False
+    no_ni:           bool          = False
 
 @dataclass
 class PayslipRow:

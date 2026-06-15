@@ -113,9 +113,12 @@ async def run_tax_scraper(
     tax_year: str = "2025/26",
     region: str = "UK",
     age: str = "under 65",
+    ni_letter: str = "A",
     student_loan: str = "No",
     pension_amount: float = 0,
     pension_type: str = "£",
+    pension_relief: str = "Net",
+    rental_income: float = 0,
     allowances: float = 0,
     tax_code: str = "",
     married: bool = False,
@@ -134,9 +137,12 @@ async def run_tax_scraper(
             tax_year=tax_year,
             region=region,
             age=age,
+            ni_letter=ni_letter,
             student_loan=student_loan,
             pension_amount=pension_amount,
             pension_type=pension_type,
+            pension_relief=pension_relief,
+            rental_income=rental_income,
             allowances=allowances,
             tax_code=tax_code,
             married=married,
@@ -307,7 +313,9 @@ async def run_landregistry_scraper(
     try:
         loop = asyncio.get_event_loop()
         print("[LR-SERVICE] Starting LandRegistryScraper...", flush=True)
-        result = await loop.run_in_executor(None, LandRegistryScraper().scrape, query)
+        headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
+        scraper = LandRegistryScraper(headless=headless_mode)
+        result = await loop.run_in_executor(None, scraper.scrape, query)
         print("[LR-SERVICE] Scraper completed successfully!", flush=True)
         return result.to_dict() if hasattr(result, 'to_dict') else result
     except Exception as e:
@@ -316,7 +324,7 @@ async def run_landregistry_scraper(
         print(f"[LR-SERVICE] ERROR: {e}", flush=True)
         print(f"[LR-SERVICE] TRACEBACK:\n{tb}", flush=True)
         logger.error(f"Land Registry scraper service error: {e}", exc_info=True)
-            
+        
         return {
             "error": str(e),
             "traceback": tb,

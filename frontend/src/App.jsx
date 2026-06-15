@@ -10,8 +10,10 @@ function App() {
 
     const [taxData, setTaxData] = useState({
         salary: 3000, period: 'month', tax_year: '2025/26', region: 'UK',
-        age: 'under 65', student_loan: 'No', pension_amount: 0, pension_type: '£',
-        allowances: 0, tax_code: '', married: false, blind: false, no_ni: false
+        age: 'under 65', ni_letter: 'A', student_loan: 'No',
+        pension_amount: 0, pension_type: '£', pension_relief: 'Net',
+        rental_income: 0, allowances: 0, tax_code: '',
+        married: false, blind: false, no_ni: false
     })
 
     const [postcode, setPostcode] = useState('LS278RR')
@@ -414,39 +416,88 @@ function App() {
                             <div className="form-group">
                                 <label>Salary Period</label>
                                 <select className="input-field" value={taxData.period} onChange={e => updateTaxData('period', e.target.value)}>
-                                    <option value="year">Yearly</option><option value="month">Monthly</option>
-                                    <option value="4weeks">4 Weekly</option><option value="week">Weekly</option>
-                                    <option value="day">Daily</option><option value="hour">Hourly</option>
+                                    <option value="year">Yearly</option>
+                                    <option value="month">Monthly</option>
+                                    <option value="4weeks">4 Weekly</option>
+                                    <option value="2weeks">2 Weekly</option>
+                                    <option value="week">Weekly</option>
+                                    <option value="day">Daily</option>
+                                    <option value="hour">Hourly</option>
                                 </select>
                             </div>
                             <div className="form-group">
                                 <label>Tax Year</label>
                                 <select className="input-field" value={taxData.tax_year} onChange={e => updateTaxData('tax_year', e.target.value)}>
-                                    <option value="2025/26">2025/26</option><option value="2024/25">2024/25</option><option value="2023/24">2023/24</option>
+                                    <option value="2026/27">2026/27</option>
+                                    <option value="2025/26">2025/26</option>
+                                    <option value="2024/25">2024/25</option>
+                                    <option value="2023/24 Jan-Mar">2023/24 Jan-Mar</option>
+                                    <option value="2023/24 Blended">2023/24 Blended</option>
+                                    <option value="2023/24 Apr-Dec">2023/24 Apr-Dec</option>
+                                    <option value="2022/23">2022/23</option>
+                                    <option value="2021/22">2021/22</option>
+                                    <option value="2020/21">2020/21</option>
+                                    <option value="2019/20">2019/20</option>
+                                    <option value="2018/19">2018/19</option>
+                                    <option value="2017/18">2017/18</option>
+                                    <option value="2016/17">2016/17</option>
+                                    <option value="2015/16">2015/16</option>
+                                    <option value="2014/15">2014/15</option>
+                                    <option value="2013/14">2013/14</option>
+                                    <option value="2012/13">2012/13</option>
+                                    <option value="2011/12">2011/12</option>
+                                    <option value="2010/11">2010/11</option>
+                                    <option value="2009/10">2009/10</option>
+                                    <option value="2008/09">2008/09</option>
+                                    <option value="2007/08">2007/08</option>
+                                    <option value="2006/07">2006/07</option>
+                                    <option value="2005/06">2005/06</option>
+                                    <option value="2004/05">2004/05</option>
+                                    <option value="2003/04">2003/04</option>
+                                    <option value="2002/03">2002/03</option>
+                                    <option value="2001/02">2001/02</option>
+                                    <option value="2000/01">2000/01</option>
                                 </select>
                             </div>
                             <div className="form-group">
                                 <label>Region</label>
                                 <select className="input-field" value={taxData.region} onChange={e => updateTaxData('region', e.target.value)}>
-                                    <option value="UK">UK (England, NI, Wales)</option><option value="Scotland">Scotland</option>
+                                    <option value="UK">UK</option>
+                                    <option value="Scotland">Scotland</option>
+                                    <option value="England">England</option>
+                                    <option value="Wales">Wales</option>
+                                    <option value="Northern Ireland">Northern Ireland</option>
                                 </select>
                             </div>
                             <div className="form-group">
-                                <label>Pension Contribution</label>
-                                <div style={{ display: 'flex', gap: 5 }}>
-                                    <input type="number" className="input-field" style={{ flex: 1 }} value={taxData.pension_amount} onChange={e => updateTaxData('pension_amount', e.target.value)} />
-                                    <select className="input-field" style={{ width: 60 }} value={taxData.pension_type} onChange={e => updateTaxData('pension_type', e.target.value)}>
-                                        <option value="£">£</option><option value="%">%</option>
-                                    </select>
-                                </div>
+                                <label>Age</label>
+                                <select className="input-field" value={taxData.age} onChange={e => updateTaxData('age', e.target.value)}>
+                                    <option value="under 65">Under 65</option>
+                                    <option value="65-74">65-74</option>
+                                    <option value="75 and over">75 and Over</option>
+                                </select>
                             </div>
                             <div className="form-group">
-                                <label>Additional Allowances (£)</label>
-                                <input type="number" className="input-field" value={taxData.allowances} onChange={e => updateTaxData('allowances', e.target.value)} />
-                            </div>
-                            <div className="form-group">
-                                <label>Tax Code (Optional)</label>
-                                <input type="text" className="input-field" value={taxData.tax_code} onChange={e => updateTaxData('tax_code', e.target.value)} placeholder="e.g. 1257L" />
+                                <label>NI Letter</label>
+                                <select className="input-field" value={taxData.ni_letter} onChange={e => updateTaxData('ni_letter', e.target.value)}>
+                                    <option value="A">A</option>
+                                    <option value="B">B</option>
+                                    <option value="C">C</option>
+                                    <option value="D">D</option>
+                                    <option value="E">E</option>
+                                    <option value="F">F</option>
+                                    <option value="G">G</option>
+                                    <option value="H">H</option>
+                                    <option value="J">J</option>
+                                    <option value="K">K</option>
+                                    <option value="L">L</option>
+                                    <option value="M">M</option>
+                                    <option value="N">N</option>
+                                    <option value="S">S</option>
+                                    <option value="V">V</option>
+                                    <option value="X">X</option>
+                                    <option value="Z">Z</option>
+                                </select>
                             </div>
                             <div className="form-group">
                                 <label>Student Loan</label>
@@ -459,6 +510,32 @@ function App() {
                                     <option value="Postgraduate">Postgraduate</option>
                                     <option value="Scottish">Scottish</option>
                                 </select>
+                            </div>
+                            <div className="form-group">
+                                <label>Rental Income (£)</label>
+                                <input type="number" className="input-field" value={taxData.rental_income} onChange={e => updateTaxData('rental_income', e.target.value)} />
+                            </div>
+                            <div className="form-group">
+                                <label>Wage Extras / Deductions (£)</label>
+                                <input type="number" className="input-field" value={taxData.allowances} onChange={e => updateTaxData('allowances', e.target.value)} />
+                            </div>
+                            <div className="form-group">
+                                <label>Tax Code (Optional)</label>
+                                <input type="text" className="input-field" value={taxData.tax_code} onChange={e => updateTaxData('tax_code', e.target.value)} placeholder="e.g. 1257L" />
+                            </div>
+                            <div className="form-group">
+                                <label>Pension Contribution</label>
+                                <div style={{ display: 'flex', gap: 5 }}>
+                                    <select className="input-field" style={{ width: 60 }} value={taxData.pension_type} onChange={e => updateTaxData('pension_type', e.target.value)}>
+                                        <option value="£">£</option>
+                                        <option value="%">%</option>
+                                    </select>
+                                    <input type="number" className="input-field" style={{ flex: 1 }} value={taxData.pension_amount} onChange={e => updateTaxData('pension_amount', e.target.value)} />
+                                    <select className="input-field" style={{ width: 70 }} value={taxData.pension_relief} onChange={e => updateTaxData('pension_relief', e.target.value)}>
+                                        <option value="Net">Net</option>
+                                        <option value="RAS">RAS</option>
+                                    </select>
+                                </div>
                             </div>
                             <div className="form-group checkbox-group" style={{ gridColumn: 'span 2' }}>
                                 {[['married','Married Allowance'],['blind','Blind Allowance'],['no_ni','Exempt from NI']].map(([key, label]) => (
