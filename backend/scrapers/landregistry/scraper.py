@@ -128,14 +128,11 @@ class LandRegistryScraper:
             else:
                 address_line_1 = house_field
 
-            user_data_path = Path(PROFILE_DIR).resolve() / username
-            self._cleanup_profile(user_data_path)
-            print(f"[LR-DEBUG] Profile path: {user_data_path}", flush=True)
+            print(f"[LR-DEBUG] Using fresh browser session (no profile)", flush=True)
 
             with sync_playwright() as p:
                 # Base launch args — works on both Windows and Linux/Docker
                 launch_args = {
-                    "user_data_dir": str(user_data_path),
                     "headless": self.headless,
                     "args": get_browser_args() + [
                         "--disable-features=IsolateOrigins,site-per-process",
@@ -143,6 +140,7 @@ class LandRegistryScraper:
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
                         "--disable-software-rasterizer",
+                        "--incognito",
                     ],
                     "ignore_default_args": ["--enable-automation"],
                     "accept_downloads": True,
@@ -157,16 +155,17 @@ class LandRegistryScraper:
                 print(f"[LR-DEBUG] Launching browser. headless={self.headless}, platform={sys.platform}", flush=True)
 
                 try:
-                    context = p.chromium.launch_persistent_context(**launch_args)
+                    browser = p.chromium.launch(**launch_args)
+                    context = browser.new_context()
                     print("[LR-DEBUG] Browser launched successfully!", flush=True)
                 except Exception as e:
                     print(f"[LR-DEBUG] Browser launch FAILED: {e}. Retrying...", flush=True)
                     _time.sleep(2)
-                    self._cleanup_profile(user_data_path)
-                    context = p.chromium.launch_persistent_context(**launch_args)
+                    browser = p.chromium.launch(**launch_args)
+                    context = browser.new_context()
                     print("[LR-DEBUG] Browser launched on retry!", flush=True)
 
-                page = context.pages[0] if context.pages else context.new_page()
+                page = context.new_page()
 
                 # Apply stealth BEFORE any navigation
                 Stealth().apply_stealth_sync(page)
