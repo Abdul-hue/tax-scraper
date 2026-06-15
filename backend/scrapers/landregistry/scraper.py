@@ -139,10 +139,10 @@ class LandRegistryScraper:
                     "headless": self.headless,
                     "args": get_browser_args() + [
                         "--disable-features=IsolateOrigins,site-per-process",
-                        "--start-maximized",
-                        "--flag-switches-begin",
-                        "--disable-site-isolation-trials",
-                        "--flag-switches-end",
+                        "--disable-gpu",
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-software-rasterizer",
                     ],
                     "ignore_default_args": ["--enable-automation"],
                     "accept_downloads": True,
@@ -218,31 +218,44 @@ class LandRegistryScraper:
                     pg.wait_for_timeout(5000)
                     print(f"[LR-DEBUG] LOGIN: After sign in. URL={pg.url}", flush=True)
 
-                    # Handle "already signed in somewhere else"
-                    if "pkmsdisplace" in pg.content() or "already signed in" in pg.content().lower():
-                        try:
+                    # Handle "already signed in somewhere else" - simplified version
+                    try:
+                        print("[LR-DEBUG] LOGIN: Checking for pkmsdisplace link...", flush=True)
+                        # Check if the link exists without getting full page content
+                        if pg.locator("a[href='/pkmsdisplace']").is_visible(timeout=3000):
+                            print("[LR-DEBUG] LOGIN: Found 'already signed in' prompt — clicking pkmsdisplace", flush=True)
                             pg.click("a[href='/pkmsdisplace']", timeout=5000)
                             pg.wait_for_load_state("domcontentloaded")
                             pg.wait_for_timeout(4000)
-                        except Exception as e:
-                            logger.warning(f"pkmsdisplace redirect failed: {e}")
+                            print(f"[LR-DEBUG] LOGIN: After pkmsdisplace. URL={pg.url}", flush=True)
+                    except Exception as e:
+                        logger.warning(f"pkmsdisplace redirect failed: {e}")
+                        print(f"[LR-DEBUG] LOGIN: pkmsdisplace failed but continuing: {e}", flush=True)
 
-                    # Verify login succeeded
-                    try:
-                        pg.wait_for_function(
-                            "() => !window.location.href.includes('pkmslogin')",
-                            timeout=30000
-                        )
-                        print("[LR-DEBUG] LOGIN: Login successful!", flush=True)
-                    except Exception:
+                    # Verify login succeeded - with more debugging
+                    print("[LR-DEBUG] LOGIN: Waiting for login to complete...", flush=True)
+                    login_success = False
+                    for i in range(60):
+                        current_url = pg.url
+                        print(f"[LR-DEBUG] LOGIN: Wait {i+1}s - URL={current_url}", flush=True)
+                        if "pkmslogin" not in current_url:
+                            login_success = True
+                            break
+                        pg.wait_for_timeout(1000)
+
+                    if not login_success:
+                        print(f"[LR-DEBUG] LOGIN: Login failed - still on pkmslogin URL after 60s", flush=True)
                         self._take_error_screenshot(pg, "landregistry_login_failed")
                         raise Exception("Login failed — check username and password")
+
+                    print("[LR-DEBUG] LOGIN: Login successful!", flush=True)
 
                 # STEP 2: Login
                 print("[LR-DEBUG] STEP 2: Calling _do_login()...", flush=True)
                 _do_login(page)
                 page.wait_for_timeout(2000)
                 print(f"[LR-DEBUG] STEP 2: Login done. URL={page.url}", flush=True)
+                print(f"[LR-DEBUG] STEP 2: Page title={page.title()}", flush=True)
 
                 # STEP 4: Navigate to Request Official Copies
                 print("[LR-DEBUG] STEP 4: Navigating to ECOCS...", flush=True)
