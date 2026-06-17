@@ -182,8 +182,8 @@ class LandRegistryScraper:
             print(f"[LR-DEBUG] Using fresh browser session", flush=True)
 
             with sync_playwright() as p:
-                # Use Playwright's new headless mode ("new") for better detection resistance
-                headless_mode = "new" if self.headless else False
+                # Use normal headless mode for compatibility
+                headless_mode = self.headless
                 
                 # Base launch args
                 launch_args = {
