@@ -7,9 +7,10 @@ Rewritten Parkers scraper flow to handle every page in order.
 import logging
 import os
 import time
+import random
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import Stealth
@@ -25,14 +26,62 @@ PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 
 
 class ParkersScraper:
-    def __init__(self, config: Optional[ParkersConfig] = None, headless: bool = None):
+    def __init__(self, config: Optional[ParkersConfig] = None, headless: bool = None, proxy_file: Optional[str] = None):
         import os
         from dotenv import load_dotenv
         load_dotenv()
         if headless is None:
-            self.headless = True
+            env_val = os.getenv("HEADLESS", "True").lower()
+            self.headless = (env_val == "true")
         else:
             self.headless = headless
+        logger.info(f"ParkersScraper initialized with headless={self.headless}")
+        
+        self.proxy_file = proxy_file
+        self.proxy_pool = self._load_proxies() if proxy_file else []
+        if not self.proxy_pool:
+            logger.info("No proxies configured — running in direct (no-proxy) mode.")
+
+    def _load_proxies(self) -> List[Dict[str, str]]:
+        """Parses the proxy file and returns a list of proxy dictionaries."""
+        if not self.proxy_file or not Path(self.proxy_file).exists():
+            logger.info("No proxy file found — skipping proxy loading.")
+            return []
+
+        proxies = []
+        with open(self.proxy_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                
+                parts = line.split(":")
+                if len(parts) != 4:
+                    logger.warning(f"Skipping invalid proxy line: {line}")
+                    continue
+                
+                host, port, user, password = parts
+                proxy_url = f"http://{user}:{password}@{host}:{port}"
+                proxies.append({
+                    "http": proxy_url,
+                    "https": proxy_url,
+                    "_label": f"{host}:{port}"
+                })
+
+        if not proxies:
+            logger.warning(f"No valid proxies found in {self.proxy_file} — running direct.")
+            return []
+        
+        logger.info(f"Successfully loaded {len(proxies)} proxies from {Path(self.proxy_file).name}")
+        return proxies
+
+    def _get_random_proxy(self) -> Optional[Dict[str, str]]:
+        """Returns a random proxy dictionary from the pool."""
+        if not self.proxy_pool:
+            return None
+        proxy = random.choice(self.proxy_pool)
+        logger.debug(f"Selected proxy: {proxy['_label']}")
+        return proxy
 
     def _cleanup_profile(self, profile_path: Path):
         """Delete stale lock files from the profile directory."""
@@ -54,6 +103,21 @@ class ParkersScraper:
         user_data_path = Path(PROFILE_DIR).resolve() / "default"
         self._cleanup_profile(user_data_path)
 
+        # Get proxy config
+        pw_proxy = None
+        proxy_dict = self._get_random_proxy()
+        if proxy_dict:
+            logger.info(f"Using proxy: {proxy_dict['_label']}")
+            from urllib.parse import urlparse
+            parsed = urlparse(proxy_dict["http"])
+            pw_proxy = {
+                "server": f"{parsed.hostname}:{parsed.port}",
+                "username": parsed.username or "",
+                "password": parsed.password or "",
+            }
+        else:
+            logger.info("No proxy available — connecting directly")
+
         with sync_playwright() as pw:
             # Use persistent context to save Cloudflare cookies between runs
             launch_args = {
@@ -63,6 +127,7 @@ class ParkersScraper:
                 "ignore_default_args": ["--enable-automation"],
                 "accept_downloads": True,
                 "viewport": {"width": 1920, "height": 1080},
+                "proxy": pw_proxy,
             }
 
             # Add channel only if on Windows/local (where Chrome is likely installed)
@@ -157,12 +222,6 @@ class ParkersScraper:
                 plate_input.fill('')
                 plate_input.type(plate, delay=50)
                 logger.info(f"Typed plate: {plate}")
-
-                # Handle captcha
-                captcha_selector = '#recaptcha-v2, iframe[src*="recaptcha"]'
-                if page.locator(captcha_selector).count() > 0:
-                    logger.info("Captcha detected, waiting 30s for auto-resolve...")
-                    page.wait_for_timeout(31000)
 
                 logger.info("Clicking submit button...")
                 page.locator('button.vrm-lookup__button').click()

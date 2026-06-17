@@ -142,12 +142,20 @@ class ListenToTaxmanScraper:
 
     def __init__(
         self,
-        headless:    bool       = True,
+        headless:    bool       = None,
         output_dir:  str | Path = "output",
         timeout_ms:  int        = 20_000,
         retry_limit: int        = 2,
         slow_mo_ms:  int        = 0,
     ):
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        if headless is None:
+            env_val = os.getenv("HEADLESS", "True").lower()
+            headless = (env_val == "true")
+        
         self.output_dir  = Path(output_dir)
         self.timeout_ms  = timeout_ms
         self.retry_limit = retry_limit
@@ -161,6 +169,7 @@ class ListenToTaxmanScraper:
             slow_mo  = slow_mo_ms,
             args     = get_browser_args(),
         )
+        logger.info("ListenToTaxmanScraper ready (headless=%s)", headless)
         self._context  = self._browser.new_context(
             viewport       = {"width": 1440, "height": 900},
             user_agent     = (

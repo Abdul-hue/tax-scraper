@@ -67,8 +67,17 @@ class MousePriceScraper:
         min_delay: int = 18,   # FIXED: raised from 12 — Anubis more likely to block rapid requests
         max_delay: int = 40,   # FIXED: raised from 28 — ditto
         max_retries: int = 3,  # FIXED: was 4
-        headless: bool = True
+        headless: bool = None
     ):
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        if headless is None:
+            env_val = os.getenv("HEADLESS", "True").lower()
+            self.headless = (env_val == "true")
+        else:
+            self.headless = headless
+        logger.info(f"MousePriceScraper initialized with headless={self.headless}")
         # Resolve paths relative to this script's directory if they are relative
         base_path = Path(__file__).parent
         # FIXED: proxy_file is now Optional[str]; only resolve path when a value is given
@@ -661,7 +670,7 @@ class MousePriceScraper:
 if __name__ == "__main__":
     # Setup logging for standalone execution
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
             logging.FileHandler("mouseprice_scraper.log", encoding="utf-8"),
@@ -670,7 +679,9 @@ if __name__ == "__main__":
     )
     
     try:
-        scraper = MousePriceScraper(proxy_file="webshare_proxies.txt", headless=False)  # FIXED: headless=False for visual debugging
+        from pathlib import Path
+        proxy_file_path = Path(__file__).parent.parent / "webshare_100_proxies.txt"
+        scraper = MousePriceScraper(proxy_file=str(proxy_file_path), headless=False)  # headless=False for visual debugging
         
         print("\n--- Testing Homepage ---")
         hp = scraper.scrape_homepage()

@@ -3,6 +3,7 @@ from playwright_stealth import Stealth
 from datetime import datetime, timezone
 import os, random, time as _time, logging, sys
 from pathlib import Path
+from typing import Optional, List, Dict
 from scrapers.landregistry.models import LandRegistryQuery, LandRegistryResult
 from scrapers.common.browser import get_browser_args
 from scrapers.landregistry.pdf_parser import parse_pdf
@@ -16,13 +17,59 @@ PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 
 
 class LandRegistryScraper:
-    def __init__(self, config=None, headless: bool = None):
+    def __init__(self, config=None, headless: bool = None, proxy_file: Optional[str] = None):
         if headless is None:
             # Default to .env setting, fallback to True if not set
             env_val = os.getenv("HEADLESS", "True").lower()
             self.headless = (env_val == "true")
         else:
             self.headless = headless
+            
+        self.proxy_file = proxy_file
+        self.proxy_pool = self._load_proxies() if proxy_file else []
+        if not self.proxy_pool:
+            logger.info("No proxies configured — running in direct (no-proxy) mode.")
+
+    def _load_proxies(self) -> List[Dict[str, str]]:
+        """Parses the proxy file and returns a list of proxy dictionaries."""
+        if not self.proxy_file or not Path(self.proxy_file).exists():
+            logger.info("No proxy file found — skipping proxy loading.")
+            return []
+
+        proxies = []
+        with open(self.proxy_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                
+                parts = line.split(":")
+                if len(parts) != 4:
+                    logger.warning(f"Skipping invalid proxy line: {line}")
+                    continue
+                
+                host, port, user, password = parts
+                proxy_url = f"http://{user}:{password}@{host}:{port}"
+                proxies.append({
+                    "http": proxy_url,
+                    "https": proxy_url,
+                    "_label": f"{host}:{port}"
+                })
+
+        if not proxies:
+            logger.warning(f"No valid proxies found in {self.proxy_file} — running direct.")
+            return []
+        
+        logger.info(f"Successfully loaded {len(proxies)} proxies from {Path(self.proxy_file).name}")
+        return proxies
+
+    def _get_random_proxy(self) -> Optional[Dict[str, str]]:
+        """Returns a random proxy dictionary from the pool."""
+        if not self.proxy_pool:
+            return None
+        proxy = random.choice(self.proxy_pool)
+        logger.info(f"Using proxy: {proxy['_label']}")
+        return proxy
 
     def _cleanup_profile(self, profile_path: Path):
         """Delete the entire profile directory to ensure a fresh session and bypass sticky Cloudflare blocks."""
@@ -129,6 +176,20 @@ class LandRegistryScraper:
                 address_line_1 = house_field
 
             print(f"[LR-DEBUG] Using fresh browser session (no profile)", flush=True)
+            
+            # Get proxy config
+            pw_proxy = None
+            proxy_dict = self._get_random_proxy()
+            if proxy_dict:
+                from urllib.parse import urlparse
+                parsed = urlparse(proxy_dict["http"])
+                pw_proxy = {
+                    "server": f"{parsed.hostname}:{parsed.port}",
+                    "username": parsed.username or "",
+                    "password": parsed.password or "",
+                }
+            else:
+                logger.info("No proxy available — connecting directly")
 
             with sync_playwright() as p:
                 # Base launch args — works on both Windows and Linux/Docker
@@ -142,6 +203,7 @@ class LandRegistryScraper:
                         "--disable-software-rasterizer",
                     ],
                     "ignore_default_args": ["--enable-automation"],
+                    "proxy": pw_proxy,
                 }
 
                 # Use real Chrome only on Windows (Docker/Linux only has Chromium)
@@ -154,7 +216,8 @@ class LandRegistryScraper:
                     browser = p.chromium.launch(**launch_args)
                     context = browser.new_context(
                         accept_downloads=True,
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        proxy=pw_proxy,
                     )
                     print("[LR-DEBUG] Browser launched successfully!", flush=True)
                 except Exception as e:
@@ -163,7 +226,8 @@ class LandRegistryScraper:
                     browser = p.chromium.launch(**launch_args)
                     context = browser.new_context(
                         accept_downloads=True,
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        proxy=pw_proxy,
                     )
                     print("[LR-DEBUG] Browser launched on retry!", flush=True)
 

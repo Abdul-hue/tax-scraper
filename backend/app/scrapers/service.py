@@ -128,6 +128,8 @@ async def run_tax_scraper(
     """
     Service function to bootstrap the tax scraping process.
     """
+    from dotenv import load_dotenv
+    load_dotenv()
     loop = asyncio.get_running_loop()
 
     def _run_sync():
@@ -150,6 +152,7 @@ async def run_tax_scraper(
             no_ni=no_ni,
         )
         headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
+        logger.info(f"run_tax_scraper: headless_mode from env = {headless_mode}")
         with ListenToTaxmanScraper(headless=headless_mode) as scraper:
             return scraper.scrape(config, screenshot=True)
 
@@ -177,11 +180,22 @@ async def run_parkers_scraper(plate: str):
     """
     Service function to bootstrap the Parkers scraping process.
     """
+    from pathlib import Path
+    from dotenv import load_dotenv
+    load_dotenv()
     loop = asyncio.get_running_loop()
 
     def _run_sync():
         headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
-        scraper = ParkersScraper(headless=headless_mode)
+        logger.info(f"run_parkers_scraper: headless_mode from env = {headless_mode}")
+        proxy_file_env = os.getenv("PROXY_FILE_PATH", "webshare_100_proxies.txt")
+        # Try to resolve proxy file path from project root first
+        proxy_file_path = Path(__file__).parent.parent.parent / proxy_file_env
+        if not proxy_file_path.exists():
+            # If not found in project root, try relative to current working directory
+            proxy_file_path = Path(proxy_file_env)
+        logger.info(f"run_parkers_scraper: using proxy file = {proxy_file_path.absolute()}")
+        scraper = ParkersScraper(headless=headless_mode, proxy_file=str(proxy_file_path))
         return scraper.valuate_by_reg(plate)
 
     result = await loop.run_in_executor(None, _run_sync)
@@ -190,16 +204,25 @@ async def run_parkers_scraper(plate: str):
 
 async def run_mouseprice_scraper(postcode: str):
     """
-    Service function to bootstrap the Mouseprice scraping process.
+    Service function to bootstrap the MousePrice scraping process.
     """
     import asyncio
     from scrapers.mouseprice_scraper import MousePriceScraper
+    from pathlib import Path
+    from dotenv import load_dotenv
+    load_dotenv()
 
     loop = asyncio.get_running_loop()
 
     def _run_sync():
         headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
-        scraper = MousePriceScraper(proxy_file="webshare_proxies.txt", headless=headless_mode)
+        logger.info(f"run_mouseprice_scraper: headless_mode from env = {headless_mode}")
+        proxy_file_env = os.getenv("PROXY_FILE_PATH", "webshare_100_proxies.txt")
+        proxy_file_path = Path(__file__).parent.parent.parent / proxy_file_env
+        if not proxy_file_path.exists():
+            proxy_file_path = Path(proxy_file_env)
+        logger.info(f"run_mouseprice_scraper: using proxy file = {proxy_file_path.absolute()}")
+        scraper = MousePriceScraper(proxy_file=str(proxy_file_path), headless=headless_mode)
         return scraper.scrape_postcode(postcode)
 
     result = await loop.run_in_executor(None, _run_sync)
@@ -294,7 +317,10 @@ async def run_landregistry_scraper(
     """
     from scrapers.landregistry.models import LandRegistryQuery
     from scrapers.landregistry.scraper import LandRegistryScraper
+    from pathlib import Path
+    from dotenv import load_dotenv
     import asyncio
+    load_dotenv()
 
     query = LandRegistryQuery(
         username=username,
@@ -314,7 +340,13 @@ async def run_landregistry_scraper(
         loop = asyncio.get_event_loop()
         print("[LR-SERVICE] Starting LandRegistryScraper...", flush=True)
         headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
-        scraper = LandRegistryScraper(headless=headless_mode)
+        logger.info(f"run_landregistry_scraper: headless_mode from env = {headless_mode}")
+        proxy_file_env = os.getenv("PROXY_FILE_PATH", "webshare_100_proxies.txt")
+        proxy_file_path = Path(__file__).parent.parent.parent / proxy_file_env
+        if not proxy_file_path.exists():
+            proxy_file_path = Path(proxy_file_env)
+        logger.info(f"run_landregistry_scraper: using proxy file = {proxy_file_path.absolute()}")
+        scraper = LandRegistryScraper(headless=headless_mode, proxy_file=str(proxy_file_path))
         result = await loop.run_in_executor(None, scraper.scrape, query)
         print("[LR-SERVICE] Scraper completed successfully!", flush=True)
         return result.to_dict() if hasattr(result, 'to_dict') else result
