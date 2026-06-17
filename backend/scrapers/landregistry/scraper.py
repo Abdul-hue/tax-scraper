@@ -198,6 +198,9 @@ class LandRegistryScraper:
 
                 print(f"[LR-DEBUG] Launching browser. headless={headless_mode}, platform={sys.platform}", flush=True)
 
+                # Log launch args
+                print(f"[LR-DEBUG] Launch args: {launch_args}", flush=True)
+                
                 try:
                     browser = p.chromium.launch(**launch_args)
                     context = browser.new_context(
@@ -206,8 +209,16 @@ class LandRegistryScraper:
                         viewport={"width": 1920, "height": 1080},
                         locale="en-GB",
                         timezone_id="Europe/London",
+                        device_scale_factor=1,
+                        has_touch=False,
+                        is_mobile=False,
+                        color_scheme="light",
+                        permissions=["geolocation"],  # Not used, but matches real browser
+                        extra_http_headers={
+                            "Accept-Language": "en-GB,en;q=0.9",
+                        }
                     )
-                    print("[LR-DEBUG] Browser launched successfully!", flush=True)
+                    print(f"[LR-DEBUG] Browser launched successfully! Context options: {context}", flush=True)
                 except Exception as e:
                     print(f"[LR-DEBUG] Browser launch FAILED: {e}. Retrying...", flush=True)
                     _time.sleep(2)
@@ -218,14 +229,23 @@ class LandRegistryScraper:
                         viewport={"width": 1920, "height": 1080},
                         locale="en-GB",
                         timezone_id="Europe/London",
+                        device_scale_factor=1,
+                        has_touch=False,
+                        is_mobile=False,
+                        color_scheme="light",
+                        permissions=["geolocation"],
+                        extra_http_headers={
+                            "Accept-Language": "en-GB,en;q=0.9",
+                        }
                     )
-                    print("[LR-DEBUG] Browser launched on retry!", flush=True)
+                    print(f"[LR-DEBUG] Browser launched on retry! Context options: {context}", flush=True)
 
                 page = context.new_page()
 
                 # Apply stealth BEFORE any navigation
+                print("[LR-DEBUG] Applying stealth...", flush=True)
                 Stealth().apply_stealth_sync(page)
-                print("[LR-DEBUG] Stealth applied.", flush=True)
+                print("[LR-DEBUG] Stealth applied successfully.", flush=True)
 
                 # STEP 1: Navigate to eservices root
                 print(f"[LR-DEBUG] STEP 1: Navigating to {BASE}/eservices/", flush=True)
