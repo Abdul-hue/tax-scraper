@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     image: scraper-tool-production
     container_name: scraper-tool-production
+    env_file:
+      - ./backend/.env
     shm_size: '2gb'
     ports:
       - "3412:3412"
@@ -14,8 +16,6 @@ services:
       - PORT=7887
       - CHROMIUM_FLAGS=--no-sandbox --disable-dev-shm-usage
       - HEADLESS=true
-      - LAND_REGISTRY_USERNAME=${LAND_REGISTRY_USERNAME}
-      - LAND_REGISTRY_PASSWORD=${LAND_REGISTRY_PASSWORD}
     volumes:
       - scraper_screenshots:/app/static/screenshots
       - scraper_chrome_profile:/app/chrome_profile
