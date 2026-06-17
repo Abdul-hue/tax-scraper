@@ -144,7 +144,14 @@ class LandRegistryScraper:
         print(f"[LR-DEBUG] scrape() called. headless={self.headless}", flush=True)
         username = query.username or os.getenv("LAND_REGISTRY_USERNAME", "")
         password = query.password or os.getenv("LAND_REGISTRY_PASSWORD", "")
+        
+        # Strip whitespace just in case
+        username = username.strip()
+        password = password.strip()
+        
         print(f"[LR-DEBUG] Credentials: user='{username}', pass_len={len(password) if password else 0}", flush=True)
+        print(f"[LR-DEBUG] Username from query: '{query.username}', Username from env: '{os.getenv('LAND_REGISTRY_USERNAME', '')}'", flush=True)
+        print(f"[LR-DEBUG] Password from query length: {len(query.password) if query.password else 0}, Password from env length: {len(os.getenv('LAND_REGISTRY_PASSWORD', ''))}", flush=True)
 
         if not username or not password:
             raise Exception("Land Registry Username and Password are required. Set LAND_REGISTRY_USERNAME/PASSWORD in .env or provide them in the request.")

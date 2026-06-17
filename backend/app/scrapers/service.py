@@ -341,6 +341,19 @@ async def run_landregistry_scraper(
         print("[LR-SERVICE] Starting LandRegistryScraper...", flush=True)
         headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
         logger.info(f"run_landregistry_scraper: headless_mode from env = {headless_mode}")
+        
+        # Log credentials source
+        if username:
+            print(f"[LR-SERVICE] Using username from request params: {username}", flush=True)
+        else:
+            env_username = os.getenv("LAND_REGISTRY_USERNAME", "")
+            print(f"[LR-SERVICE] Using username from env: {env_username}", flush=True)
+        if password:
+            print(f"[LR-SERVICE] Using password from request params (length: {len(password)})", flush=True)
+        else:
+            env_password = os.getenv("LAND_REGISTRY_PASSWORD", "")
+            print(f"[LR-SERVICE] Using password from env (length: {len(env_password)})", flush=True)
+        
         scraper = LandRegistryScraper(headless=headless_mode)
         result = await loop.run_in_executor(None, scraper.scrape, query)
         print("[LR-SERVICE] Scraper completed successfully!", flush=True)
