@@ -142,8 +142,16 @@ class LandRegistryScraper:
 
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
         print(f"[LR-DEBUG] scrape() called. headless={self.headless}", flush=True)
-        username = query.username or os.getenv("LAND_REGISTRY_USERNAME", "")
-        password = query.password or os.getenv("LAND_REGISTRY_PASSWORD", "")
+        # Prioritize query params, then fall back to env vars
+        username = query.username
+        if not username:
+            username = os.getenv("LAND_REGISTRY_USERNAME", "")
+            print(f"[LR-DEBUG] Using username from env: '{username}'", flush=True)
+        
+        password = query.password
+        if not password:
+            password = os.getenv("LAND_REGISTRY_PASSWORD", "")
+            print(f"[LR-DEBUG] Using password from env (length: {len(password)})", flush=True)
         
         # Strip whitespace just in case
         username = username.strip()

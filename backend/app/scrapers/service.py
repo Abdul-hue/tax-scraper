@@ -342,12 +342,20 @@ async def run_landregistry_scraper(
         headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
         logger.info(f"run_landregistry_scraper: headless_mode from env = {headless_mode}")
         
+        # Print all env vars for debugging (redact passwords!)
+        print("[LR-SERVICE] Current environment variables:", flush=True)
+        for key, value in os.environ.items():
+            if "PASSWORD" in key or "SECRET" in key or "KEY" in key:
+                print(f"  {key}=REDACTED", flush=True)
+            else:
+                print(f"  {key}={value}", flush=True)
+        
         # Log credentials source
         if username:
             print(f"[LR-SERVICE] Using username from request params: {username}", flush=True)
         else:
             env_username = os.getenv("LAND_REGISTRY_USERNAME", "")
-            print(f"[LR-SERVICE] Using username from env: {env_username}", flush=True)
+            print(f"[LR-SERVICE] Using username from env: '{env_username}'", flush=True)
         if password:
             print(f"[LR-SERVICE] Using password from request params (length: {len(password)})", flush=True)
         else:
