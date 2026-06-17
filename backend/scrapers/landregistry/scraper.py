@@ -8,6 +8,7 @@ from scrapers.landregistry.models import LandRegistryQuery, LandRegistryResult
 from scrapers.common.browser import get_browser_args
 from scrapers.landregistry.pdf_parser import parse_pdf
 from app.core.s3 import upload_screenshot_to_s3_sync
+from fake_useragent import UserAgent
 
 logger = logging.getLogger(__name__)
 
@@ -25,51 +26,7 @@ class LandRegistryScraper:
         else:
             self.headless = headless
             
-        self.proxy_file = proxy_file
-        self.proxy_pool = self._load_proxies() if proxy_file else []
-        if not self.proxy_pool:
-            logger.info("No proxies configured — running in direct (no-proxy) mode.")
-
-    def _load_proxies(self) -> List[Dict[str, str]]:
-        """Parses the proxy file and returns a list of proxy dictionaries."""
-        if not self.proxy_file or not Path(self.proxy_file).exists():
-            logger.info("No proxy file found — skipping proxy loading.")
-            return []
-
-        proxies = []
-        with open(self.proxy_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                
-                parts = line.split(":")
-                if len(parts) != 4:
-                    logger.warning(f"Skipping invalid proxy line: {line}")
-                    continue
-                
-                host, port, user, password = parts
-                proxy_url = f"http://{user}:{password}@{host}:{port}"
-                proxies.append({
-                    "http": proxy_url,
-                    "https": proxy_url,
-                    "_label": f"{host}:{port}"
-                })
-
-        if not proxies:
-            logger.warning(f"No valid proxies found in {self.proxy_file} — running direct.")
-            return []
-        
-        logger.info(f"Successfully loaded {len(proxies)} proxies from {Path(self.proxy_file).name}")
-        return proxies
-
-    def _get_random_proxy(self) -> Optional[Dict[str, str]]:
-        """Returns a random proxy dictionary from the pool."""
-        if not self.proxy_pool:
-            return None
-        proxy = random.choice(self.proxy_pool)
-        logger.info(f"Using proxy: {proxy['_label']}")
-        return proxy
+        logger.info("Running land registry scraper in direct (no-proxy) mode.")
 
     def _cleanup_profile(self, profile_path: Path):
         """Delete the entire profile directory to ensure a fresh session and bypass sticky Cloudflare blocks."""
@@ -81,26 +38,9 @@ class LandRegistryScraper:
             except Exception as e:
                 logger.warning(f"Could not deep clean profile {profile_path}: {e}")
 
-    def _wait_for_cloudflare(self, page, max_wait: int = 120):
-        """Wait for Cloudflare challenge to resolve."""
+    def _wait_for_cloudflare(self, page, max_wait: int = 180):
+        """Wait for Cloudflare challenge to resolve, with Turnstile handling."""
         print("[LR-DEBUG] Checking for Cloudflare challenge...", flush=True)
-
-        # First handle Turnstile iframe if present
-        try:
-            turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
-            if turnstile.is_visible(timeout=5000):
-                print("[LR-DEBUG] Turnstile iframe detected — clicking to trigger verification...", flush=True)
-                turnstile.scroll_into_view_if_needed()
-                box = turnstile.bounding_box()
-                if box:
-                    cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
-                    page.mouse.move(cx, cy, steps=10)
-                    page.wait_for_timeout(random.randint(500, 1500))
-                    page.mouse.click(cx, cy)
-                page.wait_for_timeout(3000)
-        except Exception as e:
-            print(f"[LR-DEBUG] Turnstile initial check failed: {e}", flush=True)
-            pass
 
         # Wait for challenge to clear
         for i in range(max_wait):
@@ -120,36 +60,85 @@ class LandRegistryScraper:
             if i % 2 == 0:
                 print(f"[LR-DEBUG] CF wait {i+1}s - title='{page.title()}', url={current_url[:80]}", flush=True)
 
-            # --- LEVEL 2 STEALTH: ACTIVE HUMAN INTERACTION ---
-            # Random mouse movements during the wait to look natural
-            if i % 5 == 0:
-                page.mouse.move(random.randint(100, 800), random.randint(100, 500), steps=random.randint(5, 15))
-                if i % 10 == 0:
-                    page.mouse.wheel(0, random.choice([50, 100, -50, -100]))
+            # --- HUMAN INTERACTION & TURSTILE SOLVING ---
+            # Random mouse movements
+            if i % 3 == 0:
+                page.mouse.move(
+                    random.randint(100, 1800),
+                    random.randint(100, 900),
+                    steps=random.randint(5, 20)
+                )
+                if i % 6 == 0:
+                    page.mouse.wheel(0, random.randint(-300, 300))
 
-            # Try clicking Turnstile checkbox periodically with more precision
-            if i % 6 == 0 and i > 0:
-                try:
-                    turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
-                    if turnstile.is_visible(timeout=1000):
-                        turnstile.scroll_into_view_if_needed()
-                        box = turnstile.bounding_box()
-                        if box:
-                            cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
-                            page.mouse.move(cx, cy, steps=random.randint(8, 15))
-                            page.wait_for_timeout(random.randint(300, 800))
-                            page.mouse.click(cx, cy)
-                            print(f"[LR-DEBUG] Precise Turnstile click at ({cx}, {cy})", flush=True)
-                            page.wait_for_timeout(random.randint(2000, 4000))
-                except Exception as e:
-                    print(f"[LR-DEBUG] Turnstile click failed: {e}", flush=True)
-                    pass
-            # -----------------------------------------------------
+            # Try solving Turnstile every 5 seconds
+            if i % 5 == 0:
+                self._solve_turnstile(page)
 
             page.wait_for_timeout(1000)
 
         print(f"[LR-DEBUG] Cloudflare did NOT resolve after {max_wait}s!", flush=True)
         return False
+
+    def _solve_turnstile(self, page):
+        """Attempt to solve Cloudflare Turnstile challenge."""
+        try:
+            # First, look for any Turnstile widget
+            turnstile_widget = page.locator("[class*='cf-turnstile'], [data-sitekey]")
+            
+            if turnstile_widget.count() == 0:
+                return
+            
+            # Locate Turnstile iframe(s)
+            turnstile_iframes = page.locator("iframe[src*='challenges.cloudflare.com']")
+            iframe_count = turnstile_iframes.count()
+            if iframe_count == 0:
+                return
+                
+            print(f"[LR-DEBUG] Found {iframe_count} Turnstile iframe(s)", flush=True)
+            
+            # Try each iframe
+            for i in range(iframe_count):
+                try:
+                    iframe = turnstile_iframes.nth(i)
+                    frame_locator = page.frame_locator(f"iframe[src*='challenges.cloudflare.com'] >> nth={i}")
+                    
+                    # Try multiple selectors for the checkbox
+                    checkbox_selectors = [
+                        "input[type='checkbox']",
+                        ".cf-turnstile-checkbox",
+                        ".ctp-checkbox",
+                        "[class*='checkbox']",
+                        "[role='checkbox']"
+                    ]
+                    
+                    for selector in checkbox_selectors:
+                        try:
+                            checkbox = frame_locator.locator(selector)
+                            if checkbox.is_visible(timeout=1000):
+                                print(f"[LR-DEBUG] Found Turnstile checkbox with selector: {selector}", flush=True)
+                                
+                                # Hover and click like a human
+                                checkbox.hover(timeout=2000)
+                                page.wait_for_timeout(random.randint(300, 800))
+                                checkbox.click()
+                                print("[LR-DEBUG] Clicked Turnstile checkbox", flush=True)
+                                page.wait_for_timeout(random.randint(3000, 7000))
+                                return
+                        except Exception:
+                            continue
+                            
+                    # If no checkbox, try waiting for the widget to auto-solve
+                    print("[LR-DEBUG] No checkbox found, waiting for Turnstile to auto-solve...", flush=True)
+                    page.wait_for_timeout(random.randint(5000, 12000))
+                    return
+                    
+                except Exception as e:
+                    print(f"[LR-DEBUG] Error with iframe {i}: {str(e)}", flush=True)
+                    continue
+
+        except Exception as e:
+            print(f"[LR-DEBUG] Error solving Turnstile: {str(e)}", flush=True)
 
     def scrape(self, query: LandRegistryQuery) -> LandRegistryResult:
         print(f"[LR-DEBUG] scrape() called. headless={self.headless}", flush=True)
@@ -166,6 +155,17 @@ class LandRegistryScraper:
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
         os.makedirs(PROFILE_DIR, exist_ok=True)
 
+        # Generate realistic desktop Chrome user agent
+        ua = UserAgent(browsers=['chrome'], os=['windows', 'macos'])
+        try:
+            user_agent = ua.random
+            # Verify it's a desktop UA
+            if 'Mobile' in user_agent or 'Android' in user_agent or 'iPhone' in user_agent:
+                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        except:
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        print(f"[LR-DEBUG] Using user agent: {user_agent}", flush=True)
+
         try:
             postcode = (query.postcode or "").strip().upper()
             house_field = (query.house or "").strip()
@@ -179,46 +179,33 @@ class LandRegistryScraper:
             else:
                 address_line_1 = house_field
 
-            print(f"[LR-DEBUG] Using fresh browser session (no profile)", flush=True)
-            
-            # Get proxy config
-            pw_proxy = None
-            proxy_dict = self._get_random_proxy()
-            if proxy_dict:
-                from urllib.parse import urlparse
-                parsed = urlparse(proxy_dict["http"])
-                pw_proxy = {
-                    "server": f"{parsed.hostname}:{parsed.port}",
-                    "username": parsed.username or "",
-                    "password": parsed.password or "",
-                }
-            else:
-                logger.info("No proxy available — connecting directly")
+            print(f"[LR-DEBUG] Using fresh browser session", flush=True)
 
             with sync_playwright() as p:
-                # Base launch args — works on both Windows and Linux/Docker
+                # Use Playwright's new headless mode ("new") for better detection resistance
+                headless_mode = "new" if self.headless else False
+                
+                # Base launch args
                 launch_args = {
-                    "headless": self.headless,
+                    "headless": headless_mode,
                     "args": get_browser_args(),
                     "ignore_default_args": ["--enable-automation"],
-                    "proxy": pw_proxy,
                 }
 
                 # Use real Chrome only on Windows (Docker/Linux only has Chromium)
                 if sys.platform == "win32":
                     launch_args["channel"] = "chrome"
 
-                print(f"[LR-DEBUG] Launching browser. headless={self.headless}, platform={sys.platform}", flush=True)
+                print(f"[LR-DEBUG] Launching browser. headless={headless_mode}, platform={sys.platform}", flush=True)
 
                 try:
                     browser = p.chromium.launch(**launch_args)
                     context = browser.new_context(
                         accept_downloads=True,
+                        user_agent=user_agent,
                         viewport={"width": 1920, "height": 1080},
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                         locale="en-GB",
                         timezone_id="Europe/London",
-                        proxy=pw_proxy,
                     )
                     print("[LR-DEBUG] Browser launched successfully!", flush=True)
                 except Exception as e:
@@ -227,11 +214,10 @@ class LandRegistryScraper:
                     browser = p.chromium.launch(**launch_args)
                     context = browser.new_context(
                         accept_downloads=True,
+                        user_agent=user_agent,
                         viewport={"width": 1920, "height": 1080},
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                         locale="en-GB",
                         timezone_id="Europe/London",
-                        proxy=pw_proxy,
                     )
                     print("[LR-DEBUG] Browser launched on retry!", flush=True)
 
@@ -243,13 +229,19 @@ class LandRegistryScraper:
 
                 # STEP 1: Navigate to eservices root
                 print(f"[LR-DEBUG] STEP 1: Navigating to {BASE}/eservices/", flush=True)
-                page.goto(f"{BASE}/eservices/", wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(3000)
+                page.goto(f"{BASE}/eservices/", wait_until="networkidle", timeout=120000)
+                page.wait_for_timeout(5000)
                 print(f"[LR-DEBUG] STEP 1: Loaded. URL={page.url}, title={page.title()}", flush=True)
+                
+                # Take screenshot of initial page
+                try:
+                    self._take_error_screenshot(page, "landregistry_initial_page")
+                except Exception as e:
+                    print(f"[LR-DEBUG] Could not take initial page screenshot: {e}", flush=True)
 
                 # Handle Cloudflare
                 if 'just a moment' in page.title().lower() or '__cf_chl' in page.url or 'challenge' in page.title().lower():
-                    resolved = self._wait_for_cloudflare(page, max_wait=60)
+                    resolved = self._wait_for_cloudflare(page, max_wait=180)
                     if not resolved:
                         self._take_error_screenshot(page, "landregistry_cloudflare_blocked")
                         raise Exception("Cloudflare challenge did not resolve. Try using a UK residential proxy.")
@@ -260,31 +252,114 @@ class LandRegistryScraper:
                 page.mouse.wheel(0, random.randint(100, 300))
                 page.wait_for_timeout(random.randint(500, 1500))
                 print(f"[LR-DEBUG] STEP 1: After human sim. URL={page.url}", flush=True)
+                
+                # Take screenshot after human sim
+                try:
+                    self._take_error_screenshot(page, "landregistry_after_human_sim")
+                except Exception as e:
+                    print(f"[LR-DEBUG] Could not take after human sim screenshot: {e}", flush=True)
 
                 def _do_login(pg):
                     """Perform PKMS login if the login form is currently visible."""
                     print(f"[LR-DEBUG] LOGIN: Checking for login form. URL={pg.url}", flush=True)
+                    
+                    # Debug: list all forms/inputs on page
                     try:
-                        pg.wait_for_selector("input#username", timeout=10000)
-                    except Exception:
-                        print(f"[LR-DEBUG] LOGIN: No login form — already authenticated. URL={pg.url}", flush=True)
+                        all_inputs = pg.locator("input").all()
+                        print(f"[LR-DEBUG] LOGIN: Found {len(all_inputs)} inputs on page", flush=True)
+                        for inp in all_inputs:
+                            inp_id = inp.get_attribute("id")
+                            inp_name = inp.get_attribute("name")
+                            inp_type = inp.get_attribute("type")
+                            print(f"  - Input: id={inp_id}, name={inp_name}, type={inp_type}", flush=True)
+                            
+                        all_buttons = pg.locator("input[type='submit'], button").all()
+                        print(f"[LR-DEBUG] LOGIN: Found {len(all_buttons)} buttons on page", flush=True)
+                        for btn in all_buttons:
+                            btn_value = btn.get_attribute("value")
+                            btn_text = btn.inner_text()
+                            print(f"  - Button: value={btn_value}, text={btn_text}", flush=True)
+                    except Exception as e:
+                        print(f"[LR-DEBUG] LOGIN: Could not list page elements: {e}", flush=True)
+                    
+                    try:
+                        pg.wait_for_selector("input#username, input[name='username']", timeout=15000)
+                    except Exception as e:
+                        print(f"[LR-DEBUG] LOGIN: No login form found: {e}. URL={pg.url}", flush=True)
+                        self._take_error_screenshot(pg, "landregistry_no_login_form")
                         return
 
                     print("[LR-DEBUG] LOGIN: Login form detected — typing credentials...", flush=True)
                     pg.wait_for_timeout(random.randint(500, 1500))
-                    for char in username:
-                        pg.type("input#username", char, delay=random.randint(50, 150))
-                    pg.wait_for_timeout(random.randint(300, 700))
-                    for char in password:
-                        pg.type("input#password", char, delay=random.randint(50, 150))
-                    pg.wait_for_timeout(random.randint(500, 1000))
-                    sign_in = pg.locator("input[value='Sign in']")
-                    sign_in.hover()
-                    pg.wait_for_timeout(random.randint(200, 500))
-                    print("[LR-DEBUG] LOGIN: Clicking Sign In...", flush=True)
-                    sign_in.click()
                     
-                    # Just wait a fixed time, don't rely on flaky networkidle
+                    # Try multiple selectors for username
+                    username_selectors = ["input#username", "input[name='username']"]
+                    username_filled = False
+                    for sel in username_selectors:
+                        try:
+                            if pg.locator(sel).count() > 0:
+                                pg.fill(sel, "")  # Clear first
+                                for char in username:
+                                    pg.type(sel, char, delay=random.randint(50, 150))
+                                username_filled = True
+                                print(f"[LR-DEBUG] LOGIN: Filled username with selector: {sel}", flush=True)
+                                break
+                        except Exception as e:
+                            continue
+                    if not username_filled:
+                        raise Exception("Could not fill username field")
+                        
+                    pg.wait_for_timeout(random.randint(300, 700))
+                    
+                    # Try multiple selectors for password
+                    password_selectors = ["input#password", "input[name='password']", "input[type='password']"]
+                    password_filled = False
+                    for sel in password_selectors:
+                        try:
+                            if pg.locator(sel).count() > 0:
+                                pg.fill(sel, "")  # Clear first
+                                for char in password:
+                                    pg.type(sel, char, delay=random.randint(50, 150))
+                                password_filled = True
+                                print(f"[LR-DEBUG] LOGIN: Filled password with selector: {sel}", flush=True)
+                                break
+                        except Exception as e:
+                            continue
+                    if not password_filled:
+                        raise Exception("Could not fill password field")
+                        
+                    pg.wait_for_timeout(random.randint(500, 1000))
+                    
+                    # Try multiple selectors for sign-in button
+                    signin_selectors = [
+                        "input[value='Sign in']",
+                        "input[type='submit']",
+                        "button[type='submit']",
+                        "button:has-text('Sign in')",
+                        "input:has-text('Sign in')"
+                    ]
+                    signin_clicked = False
+                    
+                    # Take screenshot before clicking
+                    self._take_error_screenshot(pg, "landregistry_before_login_click")
+                    
+                    for sel in signin_selectors:
+                        try:
+                            btn = pg.locator(sel)
+                            if btn.count() > 0 and btn.first.is_visible(timeout=1000):
+                                print(f"[LR-DEBUG] LOGIN: Found sign-in button with selector: {sel}", flush=True)
+                                btn.first.hover()
+                                pg.wait_for_timeout(random.randint(200, 500))
+                                print("[LR-DEBUG] LOGIN: Clicking Sign In...", flush=True)
+                                btn.first.click()
+                                signin_clicked = True
+                                break
+                        except Exception as e:
+                            continue
+                    if not signin_clicked:
+                        raise Exception("Could not find or click sign-in button")
+                    
+                    # Wait for navigation
                     pg.wait_for_timeout(10000)
                     
                     # Try to get URL/title, but don't crash if it fails
@@ -308,7 +383,7 @@ class LandRegistryScraper:
                         current_url = pg.url
                         if 'just a moment' in current_title or '__cf_chl' in current_url or 'challenge' in current_title:
                             print("[LR-DEBUG] LOGIN: Cloudflare challenge detected after login!", flush=True)
-                            self._wait_for_cloudflare(pg, max_wait=60)
+                            self._wait_for_cloudflare(pg, max_wait=180)
                     except Exception as e:
                         print(f"[LR-DEBUG] LOGIN: Cloudflare check failed: {e}", flush=True)
 

@@ -341,12 +341,7 @@ async def run_landregistry_scraper(
         print("[LR-SERVICE] Starting LandRegistryScraper...", flush=True)
         headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
         logger.info(f"run_landregistry_scraper: headless_mode from env = {headless_mode}")
-        proxy_file_env = os.getenv("PROXY_FILE_PATH", "webshare_100_proxies.txt")
-        proxy_file_path = Path(__file__).parent.parent.parent / proxy_file_env
-        if not proxy_file_path.exists():
-            proxy_file_path = Path(proxy_file_env)
-        logger.info(f"run_landregistry_scraper: using proxy file = {proxy_file_path.absolute()}")
-        scraper = LandRegistryScraper(headless=headless_mode, proxy_file=str(proxy_file_path))
+        scraper = LandRegistryScraper(headless=headless_mode)
         result = await loop.run_in_executor(None, scraper.scrape, query)
         print("[LR-SERVICE] Scraper completed successfully!", flush=True)
         return result.to_dict() if hasattr(result, 'to_dict') else result

@@ -10,23 +10,19 @@ def get_browser_args():
     args = [
         "--disable-blink-features=AutomationControlled",
         "--disable-infobars",
-        "--window-size=1920,1080",
-        "--start-maximized",
-        "--no-first-run",
-        "--no-default-browser-check",
         "--disable-popup-blocking",
-        "--disable-notifications",
         "--disable-extensions",
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        "--disable-notifications",
+        "--disable-web-security",
+        "--disable-features=IsolateOrigins,site-per-process,VizDisplayCompositor",
     ]
 
     # Linux/Docker specific arguments
-    # --no-sandbox is REQUIRED for running as root in Docker, but causes warnings on Windows
+    # --no-sandbox is REQUIRED for running as root in Docker
     if os.name != 'nt' or os.environ.get("DOCKER_CONTAINER"):
         args.extend([
             "--no-sandbox",
             "--disable-dev-shm-usage",
-            "--disable-gpu",
             "--disable-setuid-sandbox",
         ])
     
