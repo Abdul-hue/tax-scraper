@@ -81,7 +81,7 @@ class LandRegistryScraper:
             except Exception as e:
                 logger.warning(f"Could not deep clean profile {profile_path}: {e}")
 
-    def _wait_for_cloudflare(self, page, max_wait: int = 60):
+    def _wait_for_cloudflare(self, page, max_wait: int = 120):
         """Wait for Cloudflare challenge to resolve."""
         print("[LR-DEBUG] Checking for Cloudflare challenge...", flush=True)
 
@@ -90,14 +90,16 @@ class LandRegistryScraper:
             turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
             if turnstile.is_visible(timeout=5000):
                 print("[LR-DEBUG] Turnstile iframe detected — clicking to trigger verification...", flush=True)
-                # Scroll to it
                 turnstile.scroll_into_view_if_needed()
-                # Use bounding box to click center
                 box = turnstile.bounding_box()
                 if box:
-                    page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+                    cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+                    page.mouse.move(cx, cy, steps=10)
+                    page.wait_for_timeout(random.randint(500, 1500))
+                    page.mouse.click(cx, cy)
                 page.wait_for_timeout(3000)
-        except Exception:
+        except Exception as e:
+            print(f"[LR-DEBUG] Turnstile initial check failed: {e}", flush=True)
             pass
 
         # Wait for challenge to clear
@@ -118,27 +120,29 @@ class LandRegistryScraper:
             if i % 2 == 0:
                 print(f"[LR-DEBUG] CF wait {i+1}s - title='{page.title()}', url={current_url[:80]}", flush=True)
 
-            # --- NEW LEVEL 2 STEALTH: ACTIVE HUMAN INTERACTION ---
+            # --- LEVEL 2 STEALTH: ACTIVE HUMAN INTERACTION ---
             # Random mouse movements during the wait to look natural
             if i % 5 == 0:
-                page.mouse.move(random.randint(50, 500), random.randint(50, 500))
+                page.mouse.move(random.randint(100, 800), random.randint(100, 500), steps=random.randint(5, 15))
                 if i % 10 == 0:
-                    page.mouse.wheel(0, random.choice([100, -100]))
+                    page.mouse.wheel(0, random.choice([50, 100, -50, -100]))
 
             # Try clicking Turnstile checkbox periodically with more precision
-            if i % 8 == 0 and i > 0:
+            if i % 6 == 0 and i > 0:
                 try:
                     turnstile = page.locator("iframe[src*='challenges.cloudflare.com']")
                     if turnstile.is_visible(timeout=1000):
                         turnstile.scroll_into_view_if_needed()
                         box = turnstile.bounding_box()
                         if box:
-                            # Move mouse to box first then click
                             cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
-                            page.mouse.move(cx, cy, steps=5)
+                            page.mouse.move(cx, cy, steps=random.randint(8, 15))
+                            page.wait_for_timeout(random.randint(300, 800))
                             page.mouse.click(cx, cy)
                             print(f"[LR-DEBUG] Precise Turnstile click at ({cx}, {cy})", flush=True)
-                except Exception:
+                            page.wait_for_timeout(random.randint(2000, 4000))
+                except Exception as e:
+                    print(f"[LR-DEBUG] Turnstile click failed: {e}", flush=True)
                     pass
             # -----------------------------------------------------
 
@@ -195,13 +199,7 @@ class LandRegistryScraper:
                 # Base launch args — works on both Windows and Linux/Docker
                 launch_args = {
                     "headless": self.headless,
-                    "args": get_browser_args() + [
-                        "--disable-features=IsolateOrigins,site-per-process",
-                        "--disable-gpu",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-software-rasterizer",
-                    ],
+                    "args": get_browser_args(),
                     "ignore_default_args": ["--enable-automation"],
                     "proxy": pw_proxy,
                 }
@@ -216,7 +214,10 @@ class LandRegistryScraper:
                     browser = p.chromium.launch(**launch_args)
                     context = browser.new_context(
                         accept_downloads=True,
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        viewport={"width": 1920, "height": 1080},
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                        locale="en-GB",
+                        timezone_id="Europe/London",
                         proxy=pw_proxy,
                     )
                     print("[LR-DEBUG] Browser launched successfully!", flush=True)
@@ -226,7 +227,10 @@ class LandRegistryScraper:
                     browser = p.chromium.launch(**launch_args)
                     context = browser.new_context(
                         accept_downloads=True,
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        viewport={"width": 1920, "height": 1080},
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                        locale="en-GB",
+                        timezone_id="Europe/London",
                         proxy=pw_proxy,
                     )
                     print("[LR-DEBUG] Browser launched on retry!", flush=True)

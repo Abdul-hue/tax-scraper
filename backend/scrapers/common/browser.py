@@ -9,6 +9,15 @@ def get_browser_args():
     # Base arguments for all environments
     args = [
         "--disable-blink-features=AutomationControlled",
+        "--disable-infobars",
+        "--window-size=1920,1080",
+        "--start-maximized",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-popup-blocking",
+        "--disable-notifications",
+        "--disable-extensions",
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     ]
 
     # Linux/Docker specific arguments
@@ -19,7 +28,6 @@ def get_browser_args():
             "--disable-dev-shm-usage",
             "--disable-gpu",
             "--disable-setuid-sandbox",
-            "--single-process",
         ])
     
     # Add any extra flags from environment
