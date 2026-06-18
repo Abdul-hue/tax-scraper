@@ -109,7 +109,7 @@ def _cleanup_old_sessions(max_age_seconds: int = 3600):
 
 async def run_tax_scraper(
     salary: int,
-    period: str = "month",
+    salary_period: str = "month",
     tax_year: str = "2025/26",
     region: str = "UK",
     age: str = "under 65",
@@ -117,8 +117,9 @@ async def run_tax_scraper(
     student_loan: str = "No",
     pension_amount: float = 0,
     pension_type: str = "£",
-    pension_relief: str = "Net",
+    pension_relief: str = "RAS",
     rental_income: float = 0,
+    rental_expenses: float = 0,
     allowances: float = 0,
     tax_code: str = "",
     married: bool = False,
@@ -135,7 +136,7 @@ async def run_tax_scraper(
     def _run_sync():
         config = TaxScrapeConfig(
             salary=salary,
-            salary_period=period,
+            salary_period=salary_period,
             tax_year=tax_year,
             region=region,
             age=age,
@@ -145,6 +146,7 @@ async def run_tax_scraper(
             pension_type=pension_type,
             pension_relief=pension_relief,
             rental_income=rental_income,
+            rental_expenses=rental_expenses,
             allowances=allowances,
             tax_code=tax_code,
             married=married,

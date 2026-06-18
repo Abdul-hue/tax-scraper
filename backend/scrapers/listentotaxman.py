@@ -49,9 +49,9 @@ logger = logging.getLogger(__name__)
 # ── literal types (mirrors every dropdown on the form) ────────────────────────
 SalaryPeriod   = Literal["year", "month", "4weeks", "2weeks", "week", "day", "hour"]
 PensionType    = Literal["£", "%"]
-PensionRelief  = Literal["Net", "RAS"]
+PensionRelief  = Literal["RAS", "Salary Sacrifice"]
 StudentLoan    = Literal["No", "Plan 1", "Plan 2", "Plan 4", "Plan 5", "Postgraduate", "Scottish"]
-AgeGroup       = Literal["under 65", "65-74", "75 and over"]
+AgeGroup       = Literal["under 65", "65-74", "75 and over", "female 60 - 65"]
 Region         = Literal["UK", "Scotland", "England", "Wales", "Northern Ireland"]
 NILetter       = Literal["A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "S", "V", "X", "Z"]
 
@@ -72,8 +72,9 @@ class ScrapeConfig:
     student_loan:    StudentLoan   = "No"
     pension_amount:  float         = 0
     pension_type:    PensionType   = "£"
-    pension_relief:  PensionRelief = "Net"
+    pension_relief:  PensionRelief = "RAS"
     rental_income:   float         = 0
+    rental_expenses: float         = 0
     allowances:      float         = 0
     tax_code:        str           = ""
     married:         bool          = False
@@ -231,6 +232,17 @@ class ListenToTaxmanScraper:
                 rows           = self._parse_payslip(soup)
                 result.payslip = [asdict(r) for r in rows]
                 result.summary = self._build_summary(rows)
+                
+                # VERIFICATION: Check rental profit vs income
+                if config.rental_expenses and config.rental_income:
+                    gross = result.summary.get("Gross Rental income", {})
+                    net   = result.summary.get("Net Rental profit",   {})
+                    logger.info(
+                        "RENT CHECK: gross_yearly=%s net_yearly=%s "
+                        "(expenses=%s should reduce net)",
+                        gross.get("yearly"), net.get("yearly"),
+                        config.rental_expenses
+                    )
 
                 # ── screenshot after real values confirmed ─────────────────────
                 if screenshot:
@@ -334,24 +346,25 @@ class ListenToTaxmanScraper:
         Fill every visible input on the form using ScrapeConfig values.
 
         Field names discovered via debug_page.py inspection:
-          yr             → tax year dropdown
-          region         → income tax region dropdown
-          married        → married checkbox
-          blind          → blind checkbox
-          exNI           → I pay no NI checkbox
-          NI             → NI letter dropdown
-          plan           → student loan dropdown
-          age            → age dropdown
-          rent           → rental income input
-          add            → allowances / deductions input
-          code           → tax code input
-          #pension-prepend → pension type select (£ / %)
-          pension        → pension amount input
-          #pension-append  → pension relief select (Net / RAS)
-          ingr           → salary amount input
-          time           → salary period dropdown
+          yr                    → tax year dropdown
+          region                → income tax region dropdown
+          married               → married checkbox
+          blind                 → blind checkbox
+          exNI                  → I pay no NI checkbox
+          NI                    → NI letter dropdown
+          plan                  → student loan dropdown
+          age                   → age dropdown
+          rent                  → rental income input
+          add                   → allowances / deductions input
+          code                  → tax code input
+          #is_pension_percent   → pension type select (£ / %)
+          pension               → pension amount input
+          #is_pension_relief    → pension relief select (Net / RAS)
+          ingr                  → salary amount input
+          time                  → salary period dropdown
         """
         f = self._active_frame
+        logger.info("FILL_FORM CONFIG: rental_income=%s rental_expenses=%s", cfg.rental_income, cfg.rental_expenses)
         logger.debug("Filling form with: %s", cfg)
 
         # 1. Tax year
@@ -366,43 +379,207 @@ class ListenToTaxmanScraper:
         self._checkbox(f, ['input[name="exNI"]',    '#exNI'],    cfg.no_ni)
 
         # 4. NI Letter
-        self._select(f, ['select[name="NI"]', '#NI', 'select[name="NILetter"]'], cfg.ni_letter)
+        self._select(f, ['#niLetter', 'select[name="niLetter"]'], cfg.ni_letter)
 
         # 5. Student loan
         self._select(f, ['select[name="plan"]', '#plan'], cfg.student_loan)
 
         # 6. Age
-        self._select(f, ['select[name="age"]', '#age'], cfg.age)
+        age_map = {
+            "under 65":       "0",
+            "65-74":          "1",
+            "75 and over":    "2",
+            "female 60 - 65": "3",
+        }
+        self._select(f, ['select[name="age"]', '#age'], age_map.get(cfg.age, "0"))
 
         # 7. Rental income
         if cfg.rental_income:
-            self._fill(f, ['input[name="rent"]', '#rent', 'input[name="rental"]'],
-                       str(int(cfg.rental_income)))
+            rent_sel = 'input[name="rent"]'
+
+            # 1. Click the field to focus it
+            f.click(rent_sel)
+            f.wait_for_timeout(300)
+
+            # 2. Click 3 times to select all, then type the value
+            for _ in range(3):
+                f.click(rent_sel)
+                f.wait_for_timeout(100)
+            f.type(rent_sel, str(int(cfg.rental_income)), delay=50)
+            f.wait_for_timeout(300)
+
+            # 3. Press Tab to trigger blur naturally — this is what
+            #    the site's JS is listening for
+            f.press(rent_sel, 'Tab')
+            f.wait_for_timeout(1000)  # give JS time to reveal the field
+
+            # 4. Fire JS events as backup
+            f.evaluate("""
+                () => {
+                    const el = document.querySelector('input[name="rent"]');
+                    if (el) {
+                        el.dispatchEvent(new Event('input',  {bubbles:true}));
+                        el.dispatchEvent(new Event('change', {bubbles:true}));
+                        el.dispatchEvent(new Event('blur',   {bubbles:true}));
+                        el.dispatchEvent(new KeyboardEvent('keyup',
+                            {bubbles:true}));
+                    }
+                }
+            """)
+            f.wait_for_timeout(1000)
+            
+            # After firing blur on rent field: debug check
+            try:
+                is_visible = f.is_visible('#rent_expenses')
+                is_hidden  = f.is_hidden('#rent_expenses')
+                el_exists  = f.query_selector('#rent_expenses') is not None
+                logger.info(
+                    "rent_expenses: exists=%s visible=%s hidden=%s",
+                    el_exists, is_visible, is_hidden
+                )
+            except Exception as e:
+                logger.warning("rent_expenses debug check failed: %s", e)
+
+            # 5. Now wait for and fill rent_expenses
+            try:
+                f.wait_for_selector(
+                    '#rent_expenses',
+                    state='visible',
+                    timeout=5_000
+                )
+                logger.info("rent_expenses field is now visible")
+
+                # Click it, click 3 times to select all, type the value
+                f.click('#rent_expenses')
+                f.wait_for_timeout(200)
+                for _ in range(3):
+                    f.click('#rent_expenses')
+                    f.wait_for_timeout(100)
+                f.type(
+                    '#rent_expenses',
+                    str(int(cfg.rental_expenses)),
+                    delay=50
+                )
+                f.press('#rent_expenses', 'Tab')
+                f.wait_for_timeout(500)
+
+                # Verify the value was set
+                actual = f.input_value('#rent_expenses')
+                logger.info(
+                    "rent_expenses filled: expected=%s actual=%s",
+                    cfg.rental_expenses, actual
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "rent_expenses still not visible after Tab: %s", e
+                )
+
+                # LAST RESORT: force-set the value via JS and fire all events
+                f.evaluate(f"""
+                    () => {{
+                        const el = document.querySelector('#rent_expenses');
+                        if (el) {{
+                            el.value = '{int(cfg.rental_expenses)}';
+                            el.dispatchEvent(new Event('input',
+                                {{bubbles:true}}));
+                            el.dispatchEvent(new Event('change',
+                                {{bubbles:true}}));
+                            el.dispatchEvent(new Event('blur',
+                                {{bubbles:true}}));
+                            el.dispatchEvent(new KeyboardEvent('keyup',
+                                {{bubbles:true}}));
+                            // Also try removing hidden/disabled attributes
+                            el.removeAttribute('hidden');
+                            el.removeAttribute('disabled');
+                            el.style.display = 'block';
+                            el.style.visibility = 'visible';
+                            console.log('Force-set rent_expenses to',
+                                el.value);
+                        }} else {{
+                            console.log('rent_expenses element not found');
+                        }}
+                    }}
+                """)
+                f.wait_for_timeout(500)
+                try:
+                    actual = f.input_value('#rent_expenses')
+                    logger.info(
+                        "rent_expenses force-set: actual=%s", actual
+                    )
+                except Exception:
+                    pass
 
         # 8. Allowances / deductions
-        self._fill(f, ['input[name="add"]', '#add'],
+        self._fill_and_trigger(f, ['input[name="add"]', '#add'],
                    str(int(cfg.allowances)) if cfg.allowances else "0")
 
         # 9. Tax code (optional)
         if cfg.tax_code:
-            self._fill(f, ['input[name="code"]', '#code'], cfg.tax_code)
+            self._fill_and_trigger(f, ['input[name="code"]', '#code'], cfg.tax_code)
 
         # 10. Pension type (£ / %)
-        self._select(f, ['#pension-prepend', 'select[id="pension-prepend"]'],
-                     cfg.pension_type)
+        # Map frontend pension_type symbol to site's actual option value
+        pension_type_map = {"£": "n", "%": "y"}
+        pension_type_val = pension_type_map.get(cfg.pension_type, "n")
+        self._select(
+            f,
+            ['#is_pension_percent', 'select[id="is_pension_percent"]',
+             'select[name="is_pension_percent"]'],
+            pension_type_val
+        )
+        # Read-back assertion
+        selected_pension_type = f.eval_on_selector(
+            '#is_pension_percent',
+            'el => el.value'
+        )
+        logger.info("pension-type selected value: %s", selected_pension_type)
 
         # 11. Pension amount
-        self._fill(f, ['input[name="pension"]', '#pension'], str(cfg.pension_amount))
+        self._fill_and_trigger(f, ['input[name="pension"]', '#pension'], str(cfg.pension_amount))
 
-        # 12. Pension relief (Net / RAS)
-        self._select(f, ['#pension-append', 'select[id="pension-append"]', 'select[name="RAS"]'],
-                     cfg.pension_relief)
+        # 12. Pension relief (RAS / Salary Sacrifice)
+        pension_relief_map = {
+            "RAS":              "relief_at_source",
+            "Net":              "relief_at_source",  # fallback for old data
+            "Salary Sacrifice": "salary_sacrifice",
+        }
+        self._select(
+            f,
+            ['#pension_type', 'select[name="pension_type"]'],
+            pension_relief_map.get(cfg.pension_relief, "relief_at_source")
+        )
 
         # 13. Salary amount
-        self._fill(f, ['input[name="ingr"]', '#ingr'], str(cfg.salary))
+        self._fill_and_trigger(f, ['input[name="ingr"]', '#ingr'], str(cfg.salary))
 
         # 14. Salary period
-        self._select(f, ['select[name="time"]', '#time'], cfg.salary_period)
+        salary_period_map = {
+            "year":   "1",
+            "month":  "12",
+            "4weeks": "13",
+            "2weeks": "26",
+            "week":   "52",
+            "day":    "260",
+            "hour":   "1950",
+        }
+        self._select(
+            f,
+            ['select[name="time"]', '#time'],
+            salary_period_map.get(cfg.salary_period, "12")
+        )
+
+        # Read-back verification for all three dropdowns
+        for sel, label in [
+            ('#is_pension_percent', 'pension_type'),
+            ('#pension_type',       'pension_relief'),
+            ('#time',               'salary_period'),
+        ]:
+            try:
+                val = f.eval_on_selector(sel, 'el => el.value')
+                logger.info("READ-BACK %s = '%s'", label, val)
+            except Exception as e:
+                logger.warning("READ-BACK failed for %s: %s", label, e)
 
         logger.debug("Form filled successfully.")
 
@@ -483,26 +660,28 @@ class ListenToTaxmanScraper:
         for selector in selectors:
             try:
                 frame.wait_for_selector(selector, timeout=3_000)
-                # Try by label text (exact)
-                try:
-                    frame.select_option(selector, label=value, timeout=2_000)
-                    logger.debug("Selected by label '%s' in %s", value, selector)
-                    return
-                except Exception:
-                    pass
-                # Try by value attribute (exact)
-                try:
-                    frame.select_option(selector, value=value, timeout=2_000)
-                    logger.debug("Selected by value '%s' in %s", value, selector)
-                    return
-                except Exception:
-                    pass
-                # Partial text match on option labels
+                # Get all options first to inspect them
                 opts = frame.eval_on_selector_all(
                     f"{selector} option",
                     "els => els.map(e => ({text: e.textContent.trim(), val: e.value}))"
                 )
                 logger.debug("Options in %s: %s", selector, opts)
+                
+                # Try exact label
+                match = next((o for o in opts if o['text'] == value), None)
+                if match:
+                    frame.select_option(selector, label=match['text'], timeout=2_000)
+                    logger.debug("Selected by exact label '%s' in %s", value, selector)
+                    return
+                
+                # Try exact value
+                match = next((o for o in opts if o['val'] == value), None)
+                if match:
+                    frame.select_option(selector, value=match['val'], timeout=2_000)
+                    logger.debug("Selected by exact value '%s' in %s", value, selector)
+                    return
+                
+                # Try partial text match on label or value
                 match = next(
                     (o for o in opts
                      if value.lower() in o['text'].lower()
@@ -530,6 +709,28 @@ class ListenToTaxmanScraper:
             except Exception:
                 continue
         logger.warning("Could not fill '%s' — no selector matched", value)
+
+    def _fill_and_trigger(self, frame, selectors: list, value: str) -> None:
+        """Fill a field and dispatch input/change/blur events to trigger dynamic behavior."""
+        self._fill(frame, selectors, value)
+        for selector in selectors:
+            try:
+                # Escape single quotes in selector to avoid syntax errors
+                escaped_selector = selector.replace("'", "\\'")
+                frame.evaluate(f"""
+                    () => {{
+                        const el = document.querySelector('{escaped_selector}');
+                        if (el) {{
+                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                        }}
+                    }}
+                """)
+                logger.debug("Triggered events on %s", selector)
+                return
+            except Exception:
+                continue
 
     def _checkbox(self, frame, selectors: list, desired: bool) -> None:
         """Tick or un-tick the first matching checkbox."""

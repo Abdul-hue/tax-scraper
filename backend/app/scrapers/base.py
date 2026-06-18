@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # ── ListenToTaxman Models ──────────────────────────────────────────────────
 SalaryPeriod   = Literal["year", "month", "4weeks", "2weeks", "week", "day", "hour"]
 PensionType    = Literal["£", "%"]
-PensionRelief  = Literal["Net", "RAS"]
+PensionRelief  = Literal["RAS", "Salary Sacrifice"]
 StudentLoan    = Literal["No", "Plan 1", "Plan 2", "Plan 4", "Plan 5", "Postgraduate", "Scottish"]
 AgeGroup       = Literal["under 65", "65-74", "75 and over"]
 Region         = Literal["UK", "Scotland", "England", "Wales", "Northern Ireland"]
@@ -38,7 +38,7 @@ class TaxConfig:
     student_loan:    StudentLoan   = "No"
     pension_amount:  float         = 0
     pension_type:    PensionType   = "£"
-    pension_relief:  PensionRelief = "Net"
+    pension_relief:  PensionRelief = "RAS"
     rental_income:   float         = 0
     allowances:      float         = 0
     tax_code:        str           = ""
@@ -199,10 +199,47 @@ class ScraperEngine:
                 page.select_option('select[name="plan"]', label=config.student_loan)
                 page.select_option('select[name="age"]', label=config.age)
                 page.fill('input[name="add"]', str(int(config.allowances)) if config.allowances else "0")
-                page.select_option('#pension-prepend', label=config.pension_type)
+                # Pension type selection
+                pension_type_map = {"£": "n", "%": "y"}
+                pension_type_val = pension_type_map.get(config.pension_type, "n")
+                for sel in ['#is_pension_percent', 'select[name="is_pension_percent"]']:
+                    try:
+                        page.select_option(sel, value=pension_type_val)
+                        break
+                    except Exception:
+                        continue
                 page.fill('input[name="pension"]', str(config.pension_amount))
+                # Pension relief selection
+                pension_relief_map = {
+                    "RAS": "relief_at_source",
+                    "Net": "relief_at_source",  # fallback for old data
+                    "Salary Sacrifice": "salary_sacrifice",
+                }
+                pension_relief_val = pension_relief_map.get(config.pension_relief, "relief_at_source")
+                for sel in ['#pension_type', 'select[name="pension_type"]']:
+                    try:
+                        page.select_option(sel, value=pension_relief_val)
+                        break
+                    except Exception:
+                        continue
                 page.fill('input[name="ingr"]', str(config.salary))
-                page.select_option('select[name="time"]', label=config.salary_period)
+                # Salary period selection
+                salary_period_map = {
+                    "year": "1",
+                    "month": "12",
+                    "4weeks": "13",
+                    "2weeks": "26",
+                    "week": "52",
+                    "day": "260",
+                    "hour": "1950",
+                }
+                salary_period_val = salary_period_map.get(config.salary_period, "12")
+                for sel in ['select[name="time"]', '#time']:
+                    try:
+                        page.select_option(sel, value=salary_period_val)
+                        break
+                    except Exception:
+                        continue
 
                 # --- Submit ---
                 page.evaluate(

@@ -28,7 +28,7 @@ api_router.include_router(core_router, prefix="/core", tags=["core"])
 @api_router.get("/scrapers/taxman", tags=["scrapers"])
 async def get_tax_valuation(
     salary: int,
-    period: str = "month",
+    salary_period: str = "month",
     tax_year: str = "2025/26",
     region: str = "UK",
     age: str = "under 65",
@@ -38,6 +38,7 @@ async def get_tax_valuation(
     pension_type: str = "£",
     pension_relief: str = "Net",
     rental_income: float = 0,
+    rental_expenses: float = 0,
     allowances: float = 0,
     tax_code: str = "",
     married: bool = False,
@@ -47,20 +48,28 @@ async def get_tax_valuation(
     """
     Get a tax valuation by providing salary and various tax configuration parameters.
     """
+    import logging
     import urllib.parse
+    logger = logging.getLogger(__name__)
+    
     tax_year = urllib.parse.unquote(tax_year)
     age = urllib.parse.unquote(age)
     ni_letter = urllib.parse.unquote(ni_letter)
     pension_type = urllib.parse.unquote(pension_type)
     pension_relief = urllib.parse.unquote(pension_relief)
-    period = urllib.parse.unquote(period)
+    salary_period = urllib.parse.unquote(salary_period)
     region = urllib.parse.unquote(region)
     student_loan = urllib.parse.unquote(student_loan)
     tax_code = urllib.parse.unquote(tax_code)
 
+    logger.info(
+        "TAXMAN ROUTE PARAMS: salary=%s salary_period=%s rental_income=%s rental_expenses=%s",
+        salary, salary_period, rental_income, rental_expenses
+    )
+
     result = await run_tax_scraper(
         salary=salary,
-        period=period,
+        salary_period=salary_period,
         tax_year=tax_year,
         region=region,
         age=age,
@@ -70,6 +79,7 @@ async def get_tax_valuation(
         pension_type=pension_type,
         pension_relief=pension_relief,
         rental_income=rental_income,
+        rental_expenses=rental_expenses,
         allowances=allowances,
         tax_code=tax_code,
         married=married,

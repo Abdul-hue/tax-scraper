@@ -11,8 +11,8 @@ function App() {
     const [taxData, setTaxData] = useState({
         salary: 3000, period: 'month', tax_year: '2025/26', region: 'UK',
         age: 'under 65', ni_letter: 'A', student_loan: 'No',
-        pension_amount: 0, pension_type: '£', pension_relief: 'Net',
-        rental_income: 0, allowances: 0, tax_code: '',
+        pension_amount: 0, pension_type: '£', pension_relief: 'RAS',
+        rental_income: 0, rental_expenses: 0, allowances: 0, tax_code: '',
         married: false, blind: false, no_ni: false
     })
 
@@ -234,7 +234,26 @@ function App() {
             let timeout = 120000; // default 2 mins
 
             if (activeTab === 'taxman') {
-                endpoint = `/api/scrapers/taxman?${new URLSearchParams(taxData).toString()}`
+                const params = new URLSearchParams({
+                    salary:          taxData.salary,
+                    salary_period:   taxData.period,
+                    tax_year:        taxData.tax_year,
+                    region:          taxData.region,
+                    age:             taxData.age,
+                    ni_letter:       taxData.ni_letter,
+                    student_loan:    taxData.student_loan,
+                    pension_amount:  taxData.pension_amount,
+                    pension_type:    taxData.pension_type,
+                    pension_relief:  taxData.pension_relief,
+                    rental_income:   taxData.rental_income,
+                    rental_expenses: taxData.rental_expenses,
+                    allowances:      taxData.allowances,
+                    tax_code:        taxData.tax_code,
+                    married:         taxData.married,
+                    blind:           taxData.blind,
+                    no_ni:           taxData.no_ni,
+                });
+                endpoint = `/api/scrapers/taxman?${params.toString()}`
             } else if (activeTab === 'council') {
                 endpoint = `/api/scrapers/counciltax?postcode=${postcode}`
             } else if (activeTab === 'parkers') {
@@ -473,6 +492,7 @@ function App() {
                                 <label>Age</label>
                                 <select className="input-field" value={taxData.age} onChange={e => updateTaxData('age', e.target.value)}>
                                     <option value="under 65">Under 65</option>
+                                    <option value="female 60 - 65">Female 60 - 65</option>
                                     <option value="65-74">65-74</option>
                                     <option value="75 and over">75 and Over</option>
                                 </select>
@@ -512,9 +532,20 @@ function App() {
                                 </select>
                             </div>
                             <div className="form-group">
-                                <label>Rental Income (£)</label>
-                                <input type="number" className="input-field" value={taxData.rental_income} onChange={e => updateTaxData('rental_income', e.target.value)} />
+                            <label>Rental Income (£)</label>
+                            <input type="number" className="input-field" value={taxData.rental_income} onChange={e => updateTaxData('rental_income', e.target.value)} />
+                        </div>
+                        {parseFloat(taxData.rental_income) > 0 && (
+                            <div className="form-group">
+                                <label>Rental Expenses (£)</label>
+                                <input
+                                    type="number"
+                                    className="input-field"
+                                    value={taxData.rental_expenses}
+                                    onChange={e => updateTaxData('rental_expenses', e.target.value)}
+                                />
                             </div>
+                        )}
                             <div className="form-group">
                                 <label>Wage Extras / Deductions (£)</label>
                                 <input type="number" className="input-field" value={taxData.allowances} onChange={e => updateTaxData('allowances', e.target.value)} />
@@ -531,9 +562,9 @@ function App() {
                                         <option value="%">%</option>
                                     </select>
                                     <input type="number" className="input-field" style={{ flex: 1 }} value={taxData.pension_amount} onChange={e => updateTaxData('pension_amount', e.target.value)} />
-                                    <select className="input-field" style={{ width: 70 }} value={taxData.pension_relief} onChange={e => updateTaxData('pension_relief', e.target.value)}>
-                                        <option value="Net">Net</option>
-                                        <option value="RAS">RAS</option>
+                                    <select className="input-field" style={{ width: 140 }} value={taxData.pension_relief} onChange={e => updateTaxData('pension_relief', e.target.value)}>
+                                        <option value="RAS">RAS (Relief at Source)</option>
+                                        <option value="Salary Sacrifice">Salary Sacrifice</option>
                                     </select>
                                 </div>
                             </div>
