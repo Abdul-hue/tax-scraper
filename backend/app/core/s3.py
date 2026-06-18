@@ -15,11 +15,17 @@ S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "scraper-api-assets-2026")
 
 
 def _build_s3_client():
+    config = boto3.session.Config(
+        connect_timeout=5,
+        read_timeout=10,
+        retries={'max_attempts': 2}
+    )
     return boto3.client(
         "s3",
         region_name=AWS_REGION,
         aws_access_key_id=AWS_ACCESS_KEY_ID,
         aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        config=config,
     )
 
 

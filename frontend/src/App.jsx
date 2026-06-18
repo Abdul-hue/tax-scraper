@@ -234,6 +234,7 @@ function App() {
             let timeout = 120000; // default 2 mins
 
             if (activeTab === 'taxman') {
+                timeout = 300000; // 5 mins for taxman
                 const params = new URLSearchParams({
                     salary:          taxData.salary,
                     salary_period:   taxData.period,
