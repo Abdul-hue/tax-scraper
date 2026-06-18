@@ -251,6 +251,8 @@ class ListenToTaxmanScraper:
                     _ss_name = f"taxman_{_ts}.png"
 
                     try:
+                            # Dismiss any popups one last time before screenshot
+                        self._dismiss_popups()
                         screenshot_bytes = self._page.screenshot(full_page=True)
                         result.screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
                         logger.info("Screenshot uploaded to S3: %s", result.screenshot_url)
@@ -297,6 +299,7 @@ class ListenToTaxmanScraper:
             'button:has-text("Agree")',
             'button:has-text("Got it")',
             'button:has-text("OK")',
+            'button:has-text("Consent")',
             '[id*="cookie"] button',
             '[class*="cookie"] button',
             '[id*="consent"] button',
@@ -368,23 +371,31 @@ class ListenToTaxmanScraper:
         logger.debug("Filling form with: %s", cfg)
 
         # 1. Tax year
+        logger.info("Filling tax year...")
         self._select(f, ['select[name="yr"]', '#yr'], cfg.tax_year)
 
         # 2. Region
+        logger.info("Filling region...")
         self._select(f, ['select[name="region"]', '#region'], cfg.region)
 
         # 3. Checkboxes
+        logger.info("Filling married checkbox...")
         self._checkbox(f, ['input[name="married"]', '#married'], cfg.married)
+        logger.info("Filling blind checkbox...")
         self._checkbox(f, ['input[name="blind"]',   '#blind'],   cfg.blind)
+        logger.info("Filling exNI checkbox...")
         self._checkbox(f, ['input[name="exNI"]',    '#exNI'],    cfg.no_ni)
 
         # 4. NI Letter
+        logger.info("Filling NI letter...")
         self._select(f, ['#niLetter', 'select[name="niLetter"]'], cfg.ni_letter)
 
         # 5. Student loan
+        logger.info("Filling student loan...")
         self._select(f, ['select[name="plan"]', '#plan'], cfg.student_loan)
 
         # 6. Age
+        logger.info("Filling age...")
         age_map = {
             "under 65":       "0",
             "65-74":          "1",
@@ -734,14 +745,22 @@ class ListenToTaxmanScraper:
 
     def _checkbox(self, frame, selectors: list, desired: bool) -> None:
         """Tick or un-tick the first matching checkbox."""
+        logger.info("Trying checkboxes with selectors: %s, desired: %s", selectors, desired)
         for selector in selectors:
             try:
+                logger.info("Trying selector: %s", selector)
                 frame.wait_for_selector(selector, timeout=3_000)
+                logger.info("Selector %s found!", selector)
                 if frame.is_checked(selector) != desired:
+                    logger.info("Clicking selector %s to set to %s", selector, desired)
                     frame.click(selector)
+                else:
+                    logger.info("Selector %s already in desired state %s", selector, desired)
                 return
-            except Exception:
+            except Exception as e:
+                logger.warning("Selector %s failed: %s", selector, e)
                 continue
+        logger.warning("None of the checkbox selectors worked: %s", selectors)
 
     # ── payslip parser ────────────────────────────────────────────────────────
     def _parse_payslip(self, soup: BeautifulSoup) -> list[PayslipRow]:
