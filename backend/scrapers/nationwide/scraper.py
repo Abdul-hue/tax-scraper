@@ -100,8 +100,16 @@ class NationwideScraper:
                     page.select_option('select[name="newValueDate.year"]', str(query.to_year))
                     page.select_option('select[name="newValueDate.quarter"]', str(query.to_quarter))
 
-                    # Submit
-                    page.click('button[data-ref="getResults.button"]')
+                    # Re-remove OneTrust overlay — it can re-inject itself after initial removal
+                    page.evaluate("""
+                        const sdk = document.getElementById('onetrust-consent-sdk');
+                        if (sdk) sdk.remove();
+                        const filter = document.querySelector('.onetrust-pc-dark-filter');
+                        if (filter) filter.remove();
+                    """)
+
+                    # Submit (force=True bypasses overlay intercept check, consistent with radio clicks above)
+                    page.click('button[data-ref="getResults.button"]', force=True)
 
                     # Wait for results
                     page.wait_for_selector('div[role="alert"] dl', timeout=15000)
