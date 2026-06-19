@@ -255,8 +255,33 @@ class ListenToTaxmanScraper:
                     _ss_name = f"taxman_{_ts}.png"
 
                     try:
-                            # Dismiss any popups one last time before screenshot
+                        # 1. Try selector-based dismissal first
                         self._dismiss_popups()
+                        self._page.wait_for_timeout(800)
+
+                        # 2. Nuclear JS cleanup: remove any remaining
+                        #    fixed/absolute high-z-index overlay elements
+                        #    (consent popups are always fixed + z-index >1000).
+                        #    Safe to do here — data is already parsed.
+                        removed = self._page.evaluate("""
+                            () => {
+                                const removed = [];
+                                document.querySelectorAll('*').forEach(el => {
+                                    const st = window.getComputedStyle(el);
+                                    const z  = parseInt(st.zIndex || '0', 10);
+                                    if (st.position === 'fixed' && z > 999 &&
+                                        el.offsetWidth > 200 && el.offsetHeight > 100) {
+                                        removed.push(el.tagName + (el.id ? '#' + el.id : ''));
+                                        el.remove();
+                                    }
+                                });
+                                return removed;
+                            }
+                        """)
+                        if removed:
+                            logger.info("Pre-screenshot: removed overlay elements: %s", removed)
+                        self._page.wait_for_timeout(300)
+
                         screenshot_bytes = self._page.screenshot(full_page=True)
                         result.screenshot_url = upload_screenshot_to_s3_sync(screenshot_bytes, _ss_name)
                         logger.info("Screenshot uploaded to S3: %s", result.screenshot_url)
@@ -298,10 +323,10 @@ class ListenToTaxmanScraper:
         """
         Dismiss cookie/GDPR banners.
 
-        Only targets elements that are scoped inside known consent containers
-        or have consent-specific IDs/classes.  Broad text-based selectors
-        like button:has-text("OK") are intentionally excluded — they can match
-        the calculator's own UI and trigger unwanted page state changes.
+        Only targets elements scoped inside known consent containers or with
+        consent-specific IDs/classes.  Broad text-based selectors are used
+        only when scoped to modal/overlay wrappers so they cannot match the
+        calculator's own UI buttons.
         """
         selectors = [
             # OneTrust / Cookiebot (most common on UK sites)
@@ -310,6 +335,12 @@ class ListenToTaxmanScraper:
             '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
             '[id*="onetrust"] button[class*="accept"]',
             '[id*="onetrust"] button[class*="Allow"]',
+            # Sourcepoint CMP — used by listentotaxman.com
+            '.sp_choice_type_11',
+            '[class*="sp-"] button[title="Consent"]',
+            '[class*="message-button"]:has-text("Consent")',
+            '[class*="message-button"]:has-text("Accept")',
+            'button[data-choice-type="ACCEPT_ALL"]',
             # Generic consent containers — scoped so we only click INSIDE them
             '[id*="cookie"] button[class*="accept"]',
             '[id*="cookie"] button[class*="agree"]',
@@ -319,7 +350,12 @@ class ListenToTaxmanScraper:
             '[class*="gdpr"] button',
             '.cc-accept',
             '.cc-btn.cc-allow',
-            # Specific accept-all text scoped to consent wrappers
+            # Modal/overlay-scoped "Consent"/"Accept" buttons
+            '[class*="modal"] button:has-text("Consent")',
+            '[class*="overlay"] button:has-text("Consent")',
+            '[class*="dialog"] button:has-text("Consent")',
+            '[class*="message"] button:has-text("Consent")',
+            '[class*="popup"] button:has-text("Consent")',
             '[id*="cookie"] button:has-text("Accept")',
             '[id*="consent"] button:has-text("Accept")',
         ]
