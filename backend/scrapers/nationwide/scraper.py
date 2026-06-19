@@ -100,16 +100,28 @@ class NationwideScraper:
                     page.select_option('select[name="newValueDate.year"]', str(query.to_year))
                     page.select_option('select[name="newValueDate.quarter"]', str(query.to_quarter))
 
-                    # Re-remove OneTrust overlay — it can re-inject itself after initial removal
+                    # Nuke OneTrust from the DOM and block it from re-injecting,
+                    # then fire the submit via JS — this is the only reliable way
+                    # to click through OneTrust's persistent dark-filter overlay.
                     page.evaluate("""
+                        // Remove existing overlay nodes
                         const sdk = document.getElementById('onetrust-consent-sdk');
                         if (sdk) sdk.remove();
-                        const filter = document.querySelector('.onetrust-pc-dark-filter');
-                        if (filter) filter.remove();
-                    """)
+                        document.querySelectorAll('.onetrust-pc-dark-filter').forEach(el => el.remove());
 
-                    # Submit (force=True bypasses overlay intercept check, consistent with radio clicks above)
-                    page.click('button[data-ref="getResults.button"]', force=True)
+                        // Poison the MutationObserver / re-injection by overriding appendChild
+                        // so OneTrust cannot re-add the overlay after we remove it.
+                        const _origAppend = Element.prototype.appendChild;
+                        Element.prototype.appendChild = function(child) {
+                            if (child && child.id === 'onetrust-consent-sdk') return child;
+                            if (child && child.classList && child.classList.contains('onetrust-pc-dark-filter')) return child;
+                            return _origAppend.call(this, child);
+                        };
+
+                        // Click the button directly via JS — bypasses all Playwright intercept checks
+                        const btn = document.querySelector('button[data-ref="getResults.button"]');
+                        if (btn) btn.click();
+                    """)
 
                     # Wait for results
                     page.wait_for_selector('div[role="alert"] dl', timeout=15000)

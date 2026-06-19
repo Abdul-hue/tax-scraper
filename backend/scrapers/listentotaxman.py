@@ -216,8 +216,12 @@ class ListenToTaxmanScraper:
                 logger.info("Loading %s (attempt %d)", self.URL, attempt)
                 self._page.goto(self.URL, wait_until="domcontentloaded",
                                 timeout=40_000)
-                self._wait_for_form()
+                # Dismiss popups FIRST so their click handlers can't change
+                # the page after we've already confirmed the form is ready.
                 self._dismiss_popups()
+                # Then wait for the form — now in its final stable state,
+                # and with iframe detection in case the site embeds it.
+                self._wait_for_form()
 
                 # ── fill every form field ─────────────────────────────────────
                 self._fill_form(config)
@@ -291,57 +295,85 @@ class ListenToTaxmanScraper:
 
     # ── form filling ──────────────────────────────────────────────────────────
     def _dismiss_popups(self) -> None:
-        """Dismiss cookie/GDPR banners and promotional overlays."""
+        """
+        Dismiss cookie/GDPR banners.
+
+        Only targets elements that are scoped inside known consent containers
+        or have consent-specific IDs/classes.  Broad text-based selectors
+        like button:has-text("OK") are intentionally excluded — they can match
+        the calculator's own UI and trigger unwanted page state changes.
+        """
         selectors = [
-            'button:has-text("Accept all")',
-            'button:has-text("Accept")',
-            'button:has-text("I agree")',
-            'button:has-text("Agree")',
-            'button:has-text("Got it")',
-            'button:has-text("OK")',
-            'button:has-text("Consent")',
-            '[id*="cookie"] button',
-            '[class*="cookie"] button',
-            '[id*="consent"] button',
-            '[class*="consent"] button',
-            '[id*="onetrust-accept"] ',
+            # OneTrust / Cookiebot (most common on UK sites)
+            '#onetrust-accept-btn-handler',
+            '#accept-recommended-btn-handler',
+            '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+            '[id*="onetrust"] button[class*="accept"]',
+            '[id*="onetrust"] button[class*="Allow"]',
+            # Generic consent containers — scoped so we only click INSIDE them
+            '[id*="cookie"] button[class*="accept"]',
+            '[id*="cookie"] button[class*="agree"]',
+            '[class*="cookie-banner"] button',
+            '[class*="cookie-consent"] button',
+            '[id*="consent"] button[class*="accept"]',
+            '[class*="gdpr"] button',
             '.cc-accept',
-            'button.close',
-            'button[aria-label="Close"]'
+            '.cc-btn.cc-allow',
+            # Specific accept-all text scoped to consent wrappers
+            '[id*="cookie"] button:has-text("Accept")',
+            '[id*="consent"] button:has-text("Accept")',
         ]
         for sel in selectors:
             try:
-                self._page.click(sel, timeout=1_500)
-                logger.debug("Dismissed popup with selector: %s", sel)
+                self._page.click(sel, timeout=1_000)
+                logger.debug("Dismissed popup: %s", sel)
             except Exception:
                 pass
-        self._page.wait_for_timeout(500)
+        # Brief pause for any post-consent JS to settle
+        self._page.wait_for_timeout(800)
 
     def _wait_for_form(self) -> None:
         """
-        Wait until the form is interactive.
-        The salary field is input[name="ingr"] on listentotaxman.com.
+        Wait until the calculator form is interactive.
+
+        Checks the main page first, then all iframes — the site occasionally
+        embeds the calculator inside a widget iframe after consent popups fire.
         """
         page = self._page
-        # Use domcontentloaded — networkidle times out due to 60+ ad/tracker iframes
         page.wait_for_load_state("domcontentloaded", timeout=self.timeout_ms)
 
-        # Try all known salary field selectors
-        for sel in ['input[name="ingr"]', '#ingr', 'input[type="number"]']:
+        salary_sels = ['input[name="ingr"]', '#ingr']
+
+        # 1. Main page
+        for sel in salary_sels:
             try:
                 page.wait_for_selector(sel, state="visible", timeout=5_000)
                 self._active_frame = page
-                logger.info("Form ready — salary selector: %s", sel)
+                logger.info("Form ready — %s (main page)", sel)
                 return
             except Exception:
                 continue
 
-        # Dump inputs for debugging if still not found
+        # 2. Any iframe on the page
+        logger.info("Salary field not in main page — checking %d frames", len(page.frames))
+        for frame in page.frames:
+            if frame == page.main_frame:
+                continue
+            for sel in salary_sels:
+                try:
+                    frame.wait_for_selector(sel, state="visible", timeout=3_000)
+                    self._active_frame = frame
+                    logger.info("Form ready — %s (iframe: %s)", sel, frame.url)
+                    return
+                except Exception:
+                    continue
+
+        # Dump all inputs for debugging
         found = page.eval_on_selector_all(
             "input, select",
             "els => els.map(e => e.name + '|' + e.id + '|' + e.type)"
         )
-        raise TimeoutError(f"Form not found. Inputs on page: {found}")
+        raise TimeoutError(f"Form not found in main page or any iframe. Inputs: {found}")
 
 
     def _fill_form(self, cfg: ScrapeConfig) -> None:
@@ -665,34 +697,35 @@ class ListenToTaxmanScraper:
     # ── form element helpers ─────────────────────────────────────────────────
     def _select(self, frame, selectors: list, value: str) -> None:
         """
-        Select a dropdown option — tries label, value attribute, then partial text.
-        Iterates through all provided selectors until one works.
+        Select a dropdown option — tries Playwright select_option first
+        (label, value, partial text), then falls back to direct JS DOM
+        manipulation so the option is set even if the element is behind
+        an overlay or not yet "visible".
         """
+        escaped_value = value.replace("'", "\\'")
         for selector in selectors:
+            escaped_sel = selector.replace("'", "\\'")
+            # ── Playwright path (preferred) ───────────────────────────────
             try:
-                frame.wait_for_selector(selector, timeout=3_000)
-                # Get all options first to inspect them
+                frame.wait_for_selector(selector, timeout=2_000)
                 opts = frame.eval_on_selector_all(
                     f"{selector} option",
                     "els => els.map(e => ({text: e.textContent.trim(), val: e.value}))"
                 )
                 logger.debug("Options in %s: %s", selector, opts)
-                
-                # Try exact label
+
                 match = next((o for o in opts if o['text'] == value), None)
                 if match:
                     frame.select_option(selector, label=match['text'], timeout=2_000)
-                    logger.debug("Selected by exact label '%s' in %s", value, selector)
+                    logger.debug("Selected by label '%s' in %s", value, selector)
                     return
-                
-                # Try exact value
+
                 match = next((o for o in opts if o['val'] == value), None)
                 if match:
                     frame.select_option(selector, value=match['val'], timeout=2_000)
-                    logger.debug("Selected by exact value '%s' in %s", value, selector)
+                    logger.debug("Selected by value '%s' in %s", value, selector)
                     return
-                
-                # Try partial text match on label or value
+
                 match = next(
                     (o for o in opts
                      if value.lower() in o['text'].lower()
@@ -705,20 +738,74 @@ class ListenToTaxmanScraper:
                                  value, match['text'], selector)
                     return
             except Exception:
-                continue
+                pass
+
+            # ── JS fallback (works even when element is behind overlay) ───
+            try:
+                ok = frame.evaluate(f"""
+                    () => {{
+                        const el = document.querySelector('{escaped_sel}');
+                        if (!el || el.tagName !== 'SELECT') return false;
+                        const opts = Array.from(el.options);
+                        const v = '{escaped_value}'.toLowerCase();
+                        const opt = opts.find(o =>
+                            o.text.trim() === '{escaped_value}' ||
+                            o.value === '{escaped_value}' ||
+                            o.text.trim().toLowerCase().includes(v) ||
+                            o.value.toLowerCase().includes(v)
+                        );
+                        if (!opt) return false;
+                        el.value = opt.value;
+                        el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                        el.dispatchEvent(new Event('input',  {{bubbles: true}}));
+                        return true;
+                    }}
+                """)
+                if ok:
+                    logger.debug("JS-selected '%s' in %s", value, selector)
+                    return
+            except Exception:
+                pass
+
         logger.warning("Could not select '%s' — no selector matched", value)
 
     def _fill(self, frame, selectors: list, value: str) -> None:
-        """Clear and type into the first matching input."""
+        """Clear and type into the first matching input.
+
+        Tries Playwright fill first (respects visibility); falls back to direct
+        JS value assignment so the field is set even if covered by an overlay.
+        """
+        escaped_value = value.replace("'", "\\'")
         for selector in selectors:
+            # Playwright fill (preferred — triggers native browser events)
             try:
-                frame.wait_for_selector(selector, timeout=3_000)
+                frame.wait_for_selector(selector, timeout=2_000)
                 frame.fill(selector, "")
                 frame.fill(selector, value)
                 logger.debug("Filled %s = '%s'", selector, value)
                 return
             except Exception:
-                continue
+                pass
+            # JS fallback — works even when element is behind an overlay
+            try:
+                escaped_sel = selector.replace("'", "\\'")
+                ok = frame.evaluate(f"""
+                    () => {{
+                        const el = document.querySelector('{escaped_sel}');
+                        if (!el) return false;
+                        el.value = '';
+                        el.value = '{escaped_value}';
+                        el.dispatchEvent(new Event('input',  {{bubbles: true}}));
+                        el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                        el.dispatchEvent(new Event('blur',   {{bubbles: true}}));
+                        return true;
+                    }}
+                """)
+                if ok:
+                    logger.debug("JS-filled %s = '%s'", selector, value)
+                    return
+            except Exception:
+                pass
         logger.warning("Could not fill '%s' — no selector matched", value)
 
     def _fill_and_trigger(self, frame, selectors: list, value: str) -> None:
@@ -744,22 +831,42 @@ class ListenToTaxmanScraper:
                 continue
 
     def _checkbox(self, frame, selectors: list, desired: bool) -> None:
-        """Tick or un-tick the first matching checkbox."""
-        logger.info("Trying checkboxes with selectors: %s, desired: %s", selectors, desired)
+        """Tick or un-tick the first matching checkbox.
+
+        Falls back to JS checked-property assignment when element is not
+        visible (e.g. hidden behind an overlay or not yet rendered).
+        """
+        desired_js = 'true' if desired else 'false'
         for selector in selectors:
+            escaped_sel = selector.replace("'", "\\'")
+            # Playwright path
             try:
-                logger.info("Trying selector: %s", selector)
-                frame.wait_for_selector(selector, timeout=3_000)
-                logger.info("Selector %s found!", selector)
+                frame.wait_for_selector(selector, timeout=2_000)
                 if frame.is_checked(selector) != desired:
-                    logger.info("Clicking selector %s to set to %s", selector, desired)
                     frame.click(selector)
-                else:
-                    logger.info("Selector %s already in desired state %s", selector, desired)
+                logger.debug("Checkbox %s set to %s", selector, desired)
                 return
-            except Exception as e:
-                logger.warning("Selector %s failed: %s", selector, e)
-                continue
+            except Exception:
+                pass
+            # JS fallback
+            try:
+                ok = frame.evaluate(f"""
+                    () => {{
+                        const el = document.querySelector('{escaped_sel}');
+                        if (!el) return false;
+                        if (el.checked !== {desired_js}) {{
+                            el.checked = {desired_js};
+                            el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                            el.dispatchEvent(new Event('click',  {{bubbles: true}}));
+                        }}
+                        return true;
+                    }}
+                """)
+                if ok:
+                    logger.debug("JS-checkbox %s set to %s", selector, desired)
+                    return
+            except Exception:
+                pass
         logger.warning("None of the checkbox selectors worked: %s", selectors)
 
     # ── payslip parser ────────────────────────────────────────────────────────
