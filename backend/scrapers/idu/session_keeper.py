@@ -129,11 +129,18 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
     from scrapers.idu import session as session_mod
     from scrapers.idu.otp_email import fetch_otp_from_email
     from scrapers.common.browser import get_browser_args
+    from scrapers.idu import otp_guard
     from app.scrapers.service import _idu_operation_lock
 
     logger.info("[SessionKeeper] Starting refresh check...")
 
-    with _idu_operation_lock:
+    # Two locks: the in-process lock stops other threads in THIS worker from
+    # racing; the cross-process file lock (otp_guard.idu_login_lock) stops
+    # the OTHER uvicorn worker process from doing the same thing at the same
+    # time. Without the file lock, both workers could independently decide
+    # the session is dead and each click "Send OTP", double/triple-sending
+    # OTP emails and tripping Tracesmart's account lock.
+    with _idu_operation_lock, otp_guard.idu_login_lock():
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=os.getenv("IDU_HEADLESS", os.getenv("HEADLESS", "True")).lower() == "true",
@@ -166,14 +173,21 @@ def _do_refresh(username: str, password: str, session_file: str) -> bool:
                 page.fill("#password", password)
                 page.click('input[data-testid="sign-in"]')
 
-                # Step 3 — Send OTP button
+                # Step 3 — Send OTP button (cooldown-guarded — see otp_guard.py)
                 try:
                     otp_send_btn = page.locator('[data-testid="otp-send"]')
                     if otp_send_btn.is_visible(timeout=4000):
-                        otp_trigger_time = time.time()
-                        logger.info("[SessionKeeper] Clicking 'Send OTP' button...")
-                        otp_send_btn.click()
-                        page.wait_for_load_state("networkidle", timeout=15000)
+                        if otp_guard.otp_send_allowed():
+                            otp_trigger_time = time.time()
+                            logger.info("[SessionKeeper] Clicking 'Send OTP' button...")
+                            otp_send_btn.click()
+                            otp_guard.mark_otp_sent()
+                            page.wait_for_load_state("networkidle", timeout=15000)
+                        else:
+                            # Someone (this keeper or a request thread) already
+                            # requested an OTP moments ago — don't ask
+                            # Tracesmart to resend, just wait for that email.
+                            otp_trigger_time = time.time() - otp_guard.seconds_since_last_otp()
                     else:
                         otp_trigger_time = time.time()
                 except Exception:

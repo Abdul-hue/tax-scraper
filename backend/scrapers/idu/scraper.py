@@ -14,6 +14,7 @@ from . import session as session_mod
 from . import parser as parser_mod
 from ..common.browser import get_browser_args
 from .address_match import NoAddressMatchError, match_address_link
+from . import otp_guard
 
 logger = logging.getLogger(__name__)
 
@@ -89,33 +90,60 @@ class IDUScraper:
                     session_mod.delete_session(self.session_file)
 
             # ----------------------------------------------------------------
-            # Full login flow (only runs when no valid session exists)
+            # Full login flow (only runs when no valid session exists).
+            #
+            # Wrapped in a cross-process file lock: production runs
+            # `uvicorn --workers 2`, so without this, two worker processes
+            # could each decide the session is missing/expired at the same
+            # time and BOTH click "Send OTP" — firing multiple OTP emails
+            # for the same account, which is what trips Tracesmart's
+            # account lock. The lock serializes login across every worker
+            # (and every process on the box), not just threads in this one.
             # ----------------------------------------------------------------
+            with otp_guard.idu_login_lock():
+                # Double-checked: another process may have logged in and
+                # saved a fresh session while we were waiting for the lock.
+                # Re-check before doing a full login of our own.
+                if session_mod.load_session(self.context, self.session_file):
+                    if session_mod.is_session_valid(self.page):
+                        logger.info(
+                            "Session became valid while waiting for the login "
+                            "lock (another process just logged in) — skipping login"
+                        )
+                        return
+                    else:
+                        session_mod.delete_session(self.session_file)
 
-            # Step 1 — Go to login page
-            logger.info("Starting full login flow...")
-            self.page.goto("https://sso.tracesmart.co.uk/login/idu", timeout=30000)
-            self.page.wait_for_selector("#username", timeout=20000)
-            self.page.fill("#username", self.username)
-            self.page.fill("#password", self.password)
-            self.page.click('input[data-testid="sign-in"]')
+                # Step 1 — Go to login page
+                logger.info("Starting full login flow...")
+                self.page.goto("https://sso.tracesmart.co.uk/login/idu", timeout=30000)
+                self.page.wait_for_selector("#username", timeout=20000)
+                self.page.fill("#username", self.username)
+                self.page.fill("#password", self.password)
+                self.page.click('input[data-testid="sign-in"]')
 
-            # Step 2 — Handle "Send One Time Password" page
-            _otp_trigger_time = time.time()  # marks when OTP was triggered
-            try:
-                otp_send_btn = self.page.locator('[data-testid="otp-send"]')
-                if otp_send_btn.is_visible(timeout=3000):
-                    logger.info("Clicking 'Send One Time Password' automatically...")
-                    _otp_trigger_time = time.time()
-                    otp_send_btn.click()
-                    self.page.wait_for_load_state("networkidle", timeout=15000)
-                else:
-                    logger.debug("OTP send button not found — may not be required")
-            except Exception:
-                logger.debug("OTP send page not shown, continuing...")
+                # Step 2 — Handle "Send One Time Password" page
+                _otp_trigger_time = time.time()  # marks when OTP was triggered
+                try:
+                    otp_send_btn = self.page.locator('[data-testid="otp-send"]')
+                    if otp_send_btn.is_visible(timeout=3000):
+                        if otp_guard.otp_send_allowed():
+                            logger.info("Clicking 'Send One Time Password' automatically...")
+                            _otp_trigger_time = time.time()
+                            otp_send_btn.click()
+                            otp_guard.mark_otp_sent()
+                            self.page.wait_for_load_state("networkidle", timeout=15000)
+                        else:
+                            # An OTP was requested very recently (elsewhere) —
+                            # don't ask Tracesmart to resend, just wait for
+                            # that email to arrive instead.
+                            _otp_trigger_time = time.time() - otp_guard.seconds_since_last_otp()
+                    else:
+                        logger.debug("OTP send button not found — may not be required")
+                except Exception:
+                    logger.debug("OTP send page not shown, continuing...")
 
-            # Step 3 — Handle OTP input (fully automated via email)
-            try:
+                # Step 3 — Handle OTP input (fully automated via email)
                 self.page.wait_for_selector('[data-testid="otp-code"]', timeout=10000)
 
                 from .otp_email import fetch_otp_from_email
@@ -138,99 +166,97 @@ class IDUScraper:
                         "OTP not received from email within timeout. "
                         "Check OTP_EMAIL_* settings in .env and IMAP access on the account."
                     )
-            except Exception:
-                raise
 
-            # Step 4 — Handle /mfa/ intermediate page (device trust / additional MFA step)
-            if "/mfa/" in self.page.url or "/sso/" in self.page.url:
-                logger.warning("[Scraper] Still on MFA/SSO page after OTP: %s", self.page.url)
-                try:
-                    html_preview = self.page.content()[:2000]
-                    logger.warning("[Scraper] MFA page HTML preview:\n%s", html_preview)
-                    buttons = self.page.locator("button, input[type=submit]").all()
-                    for btn in buttons:
-                        try:
-                            logger.warning(
-                                "[Scraper] Visible element: tag=%s text=%r visible=%s",
-                                btn.evaluate("el => el.tagName"),
-                                btn.inner_text() if btn.is_visible() else "(hidden)",
-                                btn.is_visible(),
-                            )
-                        except Exception:
-                            pass
-                except Exception as log_err:
-                    logger.warning("[Scraper] Could not log MFA page details: %s", log_err)
-
-                mfa_handled = False
-                try:
-                    for keyword in ["Continue", "Accept", "Confirm", "Proceed"]:
-                        btn = self.page.get_by_role("button", name=keyword)
-                        if btn.is_visible(timeout=3000):
-                            logger.info("[Scraper] Clicking MFA button: %s", keyword)
-                            btn.click()
-                            self.page.wait_for_load_state("networkidle", timeout=15000)
-                            mfa_handled = True
-                            break
-                    if not mfa_handled:
-                        any_btn = self.page.locator("button, input[type=submit]").first
-                        if any_btn.is_visible(timeout=3000):
-                            logger.info("[Scraper] Clicking first visible MFA element as fallback")
-                            any_btn.click()
-                            self.page.wait_for_load_state("networkidle", timeout=15000)
-                            mfa_handled = True
-                except Exception as mfa_err:
-                    logger.warning("[Scraper] MFA handler error: %s", mfa_err)
-
+                # Step 4 — Handle /mfa/ intermediate page (device trust / additional MFA step)
                 if "/mfa/" in self.page.url or "/sso/" in self.page.url:
-                    logger.error(
-                        "[Scraper] STILL on MFA/SSO page after handler. URL: %s | Title: %s",
-                        self.page.url,
-                        self.page.title(),
+                    logger.warning("[Scraper] Still on MFA/SSO page after OTP: %s", self.page.url)
+                    try:
+                        html_preview = self.page.content()[:2000]
+                        logger.warning("[Scraper] MFA page HTML preview:\n%s", html_preview)
+                        buttons = self.page.locator("button, input[type=submit]").all()
+                        for btn in buttons:
+                            try:
+                                logger.warning(
+                                    "[Scraper] Visible element: tag=%s text=%r visible=%s",
+                                    btn.evaluate("el => el.tagName"),
+                                    btn.inner_text() if btn.is_visible() else "(hidden)",
+                                    btn.is_visible(),
+                                )
+                            except Exception:
+                                pass
+                    except Exception as log_err:
+                        logger.warning("[Scraper] Could not log MFA page details: %s", log_err)
+
+                    mfa_handled = False
+                    try:
+                        for keyword in ["Continue", "Accept", "Confirm", "Proceed"]:
+                            btn = self.page.get_by_role("button", name=keyword)
+                            if btn.is_visible(timeout=3000):
+                                logger.info("[Scraper] Clicking MFA button: %s", keyword)
+                                btn.click()
+                                self.page.wait_for_load_state("networkidle", timeout=15000)
+                                mfa_handled = True
+                                break
+                        if not mfa_handled:
+                            any_btn = self.page.locator("button, input[type=submit]").first
+                            if any_btn.is_visible(timeout=3000):
+                                logger.info("[Scraper] Clicking first visible MFA element as fallback")
+                                any_btn.click()
+                                self.page.wait_for_load_state("networkidle", timeout=15000)
+                                mfa_handled = True
+                    except Exception as mfa_err:
+                        logger.warning("[Scraper] MFA handler error: %s", mfa_err)
+
+                    if "/mfa/" in self.page.url or "/sso/" in self.page.url:
+                        logger.error(
+                            "[Scraper] STILL on MFA/SSO page after handler. URL: %s | Title: %s",
+                            self.page.url,
+                            self.page.title(),
+                        )
+
+                # Step 4b — Handle conflict / concurrent-session page automatically
+                try:
+                    self.page.wait_for_selector('[data-testid="accept"]', timeout=8000)
+                    print("Conflict page detected — accepting automatically...")
+                    self.page.click('[data-testid="accept"]')
+                    self.page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
+
+                # Step 5 — Verify we are now logged in
+                logger.info(f"Final login check at URL: {self.page.url}")
+                try:
+                    try:
+                        self.page.wait_for_load_state("networkidle", timeout=10000)
+                    except Exception:
+                        logger.debug("Network did not go idle during final login check, proceeding with indicator check")
+
+                    dashboard_indicator = self.page.locator("#hd-logout-button, .newSearch").or_(
+                        self.page.get_by_text("You are logged in")
+                    ).first
+                    dashboard_indicator.wait_for(state="visible", timeout=20000)
+                    logger.info("Dashboard detected successfully")
+                except Exception as e:
+                    try:
+                        logger.error(
+                            f"Dashboard detection failed. URL: {self.page.url}, "
+                            f"Title: {self.page.title()}"
+                        )
+                    except Exception:
+                        logger.error("Dashboard detection failed. Page was already closed.")
+                    raise RuntimeError(
+                        f"Login failed — dashboard not detected after MFA: {str(e)}"
                     )
 
-            # Step 4b — Handle conflict / concurrent-session page automatically
-            try:
-                self.page.wait_for_selector('[data-testid="accept"]', timeout=8000)
-                print("Conflict page detected — accepting automatically...")
-                self.page.click('[data-testid="accept"]')
-                self.page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:
-                pass
-
-            # Step 5 — Verify we are now logged in
-            logger.info(f"Final login check at URL: {self.page.url}")
-            try:
-                try:
-                    self.page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:
-                    logger.debug("Network did not go idle during final login check, proceeding with indicator check")
-                
-                dashboard_indicator = self.page.locator("#hd-logout-button, .newSearch").or_(
-                    self.page.get_by_text("You are logged in")
-                ).first
-                dashboard_indicator.wait_for(state="visible", timeout=20000)
-                logger.info("Dashboard detected successfully")
-            except Exception as e:
-                try:
-                    logger.error(
-                        f"Dashboard detection failed. URL: {self.page.url}, "
-                        f"Title: {self.page.title()}"
-                    )
-                except Exception:
-                    logger.error("Dashboard detection failed. Page was already closed.")
-                raise RuntimeError(
-                    f"Login failed — dashboard not detected after MFA: {str(e)}"
+                # ----------------------------------------------------------------
+                # Save session so ALL future runs skip login entirely
+                # ----------------------------------------------------------------
+                session_mod.save_session(self.context, self.session_file)
+                logger.info(
+                    "Session saved to %s — next run will skip login and OTP",
+                    self.session_file,
                 )
-
-            # ----------------------------------------------------------------
-            # Save session so ALL future runs skip login entirely
-            # ----------------------------------------------------------------
-            session_mod.save_session(self.context, self.session_file)
-            logger.info(
-                "Session saved to %s — next run will skip login and OTP",
-                self.session_file,
-            )
-            return
+                return
 
         except Exception:
             logger.exception("Error during login flow")

@@ -253,14 +253,10 @@ async def run_nationwide_scraper(
         to_quarter=to_quarter,
     )
 
-    loop = asyncio.get_running_loop()
+    headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
+    async with NationwideScraper(headless=headless_mode) as scraper:
+        result = await scraper.scrape(query)
 
-    def _run_sync():
-        headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
-        with NationwideScraper(headless=headless_mode) as scraper:
-            return scraper.scrape(query)
-
-    result = await loop.run_in_executor(None, _run_sync)
     return result.to_dict() if hasattr(result, 'to_dict') else result
 
 

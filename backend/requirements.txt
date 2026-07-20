@@ -10,3 +10,4 @@ python-dotenv
 fake-useragent
 tenacity
 boto3
+filelock
