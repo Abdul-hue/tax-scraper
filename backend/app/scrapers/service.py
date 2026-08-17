@@ -379,6 +379,37 @@ async def run_landregistry_scraper(
         }
 
 
+async def run_eiir_scraper(
+    forename: str,
+    surname: str,
+    dob: str = "",
+    follow_details: bool = True,
+) -> dict:
+    """
+    Service function to run the UK Individual Insolvency Register (EIIR) scraper.
+    When dob is provided the result includes an in_iva verdict.
+    """
+    from scrapers.eiir.scraper import EiirScraper
+    from scrapers.eiir.models import EiirQuery
+
+    query = EiirQuery(
+        forename=forename,
+        surname=surname,
+        dob=dob,
+        follow_details=follow_details,
+    )
+
+    loop = asyncio.get_running_loop()
+
+    def _run_sync():
+        headless_mode = os.getenv("HEADLESS", "true").lower() == "true"
+        with EiirScraper(headless=headless_mode) as scraper:
+            return scraper.search(query)
+
+    result = await loop.run_in_executor(None, _run_sync)
+    return result.to_dict()
+
+
 async def run_child_maintenance_scraper(
     role: str,
     multiple_receiving_parents: bool,
