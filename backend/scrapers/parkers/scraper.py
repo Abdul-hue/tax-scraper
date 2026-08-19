@@ -233,9 +233,13 @@ class ParkersScraper:
                         state='attached'
                     )
                     if page.locator('span.error').count() > 0:
-                        error_text = page.inner_text('span.error').lower()
-                        if 'not found' in error_text:
-                            logger.info(f"Registration not found: {error_text}")
+                        error_text = page.inner_text('span.error').lower().strip()
+                        if error_text:
+                            # Any populated error span here (e.g. "not found",
+                            # "no valuation data found") means the lookup failed —
+                            # the page never reaches the confirmation step, so don't
+                            # fall through to the 15s confirm-page wait below.
+                            logger.info(f"Registration lookup error: {error_text}")
                             return ParkersResult(
                                 plate=plate,
                                 reg_plate=plate,
