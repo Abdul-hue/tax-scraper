@@ -10,7 +10,6 @@ from .models import EiirQuery, EiirResult, EiirRecord
 from .parser import (
     parse_results,
     parse_detail,
-    parse_no_results_message,
     extract_key_fields,
     normalise_dob,
     is_iva,
@@ -105,9 +104,17 @@ class EiirScraper:
 
                     records = parse_results(html)
 
-                    if not records:
-                        result.error = parse_no_results_message(html) or "No EIIR records found"
-                    else:
+                    # Zero records is a legitimate, successful outcome (nobody
+                    # by this name is on the register) — NOT an error. It used
+                    # to set result.error here, which made a clean "not on
+                    # register" search look identical to a genuine scrape
+                    # failure to callers that check `.error` (see
+                    # case-assessment-backend's run_eiir(), which treated any
+                    # `error` as a failed task). result.records simply stays
+                    # at its default empty list; _compute_verdict below still
+                    # runs and correctly resolves this to "not_on_register" /
+                    # "no_dob_provided".
+                    if records:
                         if follow:
                             self._enrich_with_details(page, records)
                         result.records = records

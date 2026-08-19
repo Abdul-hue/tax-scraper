@@ -92,10 +92,23 @@ def parse_results(html: str) -> list[EiirRecord]:
                 records.append(record)
 
     if not records:
-        # Fallback: any anchor that points at a detail page
-        for a in soup.select("a[href*='/eiir/']"):
+        # Fallback: any anchor that points at a detail page. Scoped to the
+        # main content area only — the un-scoped version used to match the
+        # page's OWN site-chrome links (the header's "Individual Insolvency
+        # Register" service-name link and the breadcrumb's "Home" link both
+        # point at the bare site root "/eiir/", which contains neither
+        # "search" nor "home" as a literal substring, so the old href-only
+        # filter let them through and fabricated two fake "records" out of
+        # navigation chrome on every genuine zero-result search). Real
+        # result/detail links only ever appear inside <main>; breadcrumbs,
+        # the header, and the "Related content" sidebar all sit outside it.
+        main = soup.select_one("main") or soup
+        for a in main.select("a[href*='/eiir/']"):
             href = a.get("href", "")
-            if "search" in href.lower() or "home" in href.lower():
+            href_path = href.split("?", 1)[0].rstrip("/")
+            # Reject the bare site root and the search form itself — neither
+            # can ever be a genuine record's detail page.
+            if href_path in ("", "/eiir", "/eiir/search") or "/home/" in href.lower():
                 continue
             text = a.get_text(" ", strip=True)
             if not text:
@@ -225,6 +238,20 @@ def extract_key_fields(detail_fields: dict) -> dict:
 def parse_no_results_message(html: str) -> Optional[str]:
     """Return the user-facing 'no results' message if present, else None."""
     soup = BeautifulSoup(html, "html.parser")
+
+    # The live site's actual zero-result wording is a plain paragraph reading
+    # "We didn't find any results for 'X'. Try searching again." — not an
+    # error/notification component, so none of the selectors below ever
+    # matched it, and the regex below didn't recognise the phrasing either.
+    # Without this, a genuine "nobody by this name is on the register"
+    # result fell through with no error message, and parse_results()'s
+    # anchor-fallback (before its own fix) fabricated records out of
+    # unrelated navigation links instead.
+    for p in soup.select(".govuk-body"):
+        text = p.get_text(" ", strip=True)
+        if re.search(r"didn.?t find (any )?results|did not find (any )?results", text, re.IGNORECASE):
+            return text
+
     for selector in [
         ".govuk-error-summary",
         ".govuk-error-message",
@@ -237,5 +264,9 @@ def parse_no_results_message(html: str) -> Optional[str]:
             if text:
                 return text
 
-    m = re.search(r"(no\s+(matches|results|records)\s+found|no\s+entries)", html, re.IGNORECASE)
+    m = re.search(
+        r"(no\s+(matches|results|records)\s+found|no\s+entries"
+        r"|didn.?t find (any )?results|did not find (any )?results)",
+        html, re.IGNORECASE,
+    )
     return m.group(0) if m else None

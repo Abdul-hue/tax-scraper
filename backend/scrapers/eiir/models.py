@@ -60,7 +60,9 @@ class EiirResult:
 
     @property
     def success(self) -> bool:
-        return self.error is None and len(self.records) > 0
+        # A completed search with zero records is a genuine "not on
+        # register" result, not a failure — don't require len(records) > 0.
+        return self.error is None
 
     def to_dict(self) -> dict:
         return asdict(self)
