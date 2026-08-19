@@ -327,6 +327,17 @@ class ListenToTaxmanScraper:
         consent-specific IDs/classes.  Broad text-based selectors are used
         only when scoped to modal/overlay wrappers so they cannot match the
         calculator's own UI buttons.
+
+        Each selector is checked with a non-waiting `query_selector` first —
+        the previous version called `page.click(sel, timeout=1_000)`
+        unconditionally for every one of the ~25 selectors below with no
+        `break` on success, so on a page where the popup never appears (or
+        was already dismissed — the common case for the second call, made
+        again right before the screenshot) it burned ~25 x up to 1s = ~26s
+        waiting on elements that were never there, TWICE per scrape. That
+        was confirmed (direct timing, 2026-08-19) to account for ~52s of a
+        ~63-70s scrape and was the actual cause of tax-verification calls
+        timing out upstream in case-assessment-tool.
         """
         selectors = [
             # OneTrust / Cookiebot (most common on UK sites)
@@ -359,14 +370,22 @@ class ListenToTaxmanScraper:
             '[id*="cookie"] button:has-text("Accept")',
             '[id*="consent"] button:has-text("Accept")',
         ]
+        dismissed = False
         for sel in selectors:
             try:
-                self._page.click(sel, timeout=1_000)
+                el = self._page.query_selector(sel)
+                if not el:
+                    continue
+                el.click(timeout=1_000)
                 logger.debug("Dismissed popup: %s", sel)
+                dismissed = True
+                break
             except Exception:
-                pass
-        # Brief pause for any post-consent JS to settle
-        self._page.wait_for_timeout(800)
+                continue
+        # Brief pause for any post-consent JS to settle — only needed when
+        # we actually dismissed something.
+        if dismissed:
+            self._page.wait_for_timeout(800)
 
     def _wait_for_form(self) -> None:
         """
