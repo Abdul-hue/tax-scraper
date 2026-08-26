@@ -55,6 +55,22 @@ AgeGroup       = Literal["under 65", "65-74", "75 and over", "female 60 - 65"]
 Region         = Literal["UK", "Scotland", "England", "Wales", "Northern Ireland"]
 NILetter       = Literal["A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "S", "V", "X", "Z"]
 
+# The site's own <option value="..."> for the salary-period dropdown ('time').
+# Not an arbitrary code — each value IS the number of pay periods per year
+# for that frequency (1 annual, 12 monthly, 13 four-weekly, 26 fortnightly,
+# 52 weekly, 260 daily, 1950 hourly), so it doubles as the periods-per-year
+# multiplier _verify_gross_pay_reconciles uses to sanity-check the parsed
+# result — one constant, not two dicts that could drift apart.
+SALARY_PERIOD_MAP = {
+    "year":   "1",
+    "month":  "12",
+    "4weeks": "13",
+    "2weeks": "26",
+    "week":   "52",
+    "day":    "260",
+    "hour":   "1950",
+}
+
 
 # ── input model ───────────────────────────────────────────────────────────────
 @dataclass
@@ -236,7 +252,15 @@ class ListenToTaxmanScraper:
                 rows           = self._parse_payslip(soup)
                 result.payslip = [asdict(r) for r in rows]
                 result.summary = self._build_summary(rows)
-                
+
+                # VERIFICATION: the parsed Gross Pay must reconcile with the
+                # submitted salary — catches a stale/never-updated page that
+                # `_submit()`'s own wait only warns about. Skipped when the
+                # payslip table is already empty; the "parsed as empty"
+                # check further down covers that case with its own message.
+                if result.payslip:
+                    self._verify_gross_pay_reconciles(config, result.summary)
+
                 # VERIFICATION: Check rental profit vs income
                 if config.rental_expenses and config.rental_income:
                     gross = result.summary.get("Gross Rental income", {})
@@ -652,19 +676,10 @@ class ListenToTaxmanScraper:
         self._fill_and_trigger(f, ['input[name="ingr"]', '#ingr'], str(cfg.salary))
 
         # 14. Salary period
-        salary_period_map = {
-            "year":   "1",
-            "month":  "12",
-            "4weeks": "13",
-            "2weeks": "26",
-            "week":   "52",
-            "day":    "260",
-            "hour":   "1950",
-        }
         self._select(
             f,
             ['select[name="time"]', '#time'],
-            salary_period_map.get(cfg.salary_period, "12")
+            SALARY_PERIOD_MAP.get(cfg.salary_period, "12")
         )
 
         # Read-back verification for all three dropdowns
@@ -1005,6 +1020,76 @@ class ListenToTaxmanScraper:
             }
             for row in rows if row.label
         }
+
+    # ── result verification ──────────────────────────────────────────────────
+    @staticmethod
+    def _parse_money(text) -> Optional[float]:
+        """Parse a printed money string ('£26,364.00') into a float, or
+        None when it isn't a parseable number (blank cell, dash, ...)."""
+        if not text:
+            return None
+        cleaned = str(text).replace('£', '').replace(',', '').strip()
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _verify_gross_pay_reconciles(cfg: ScrapeConfig, summary: dict) -> None:
+        """
+        Cross-check the parsed 'Gross Pay' row against the salary actually
+        submitted — the one check that catches a false "success".
+
+        Deliberately a @staticmethod, like `_parse_money`: it touches no
+        browser/page state at all, only `cfg` and the already-parsed
+        `summary` dict — which means it (and its unit tests) never need a
+        live Playwright browser or the real site to run.
+
+        `_submit()`'s own wait-for-nonzero-Gross-Pay check only WARNS on a
+        timeout rather than failing (see `_submit`), so a page that never
+        actually re-rendered for THIS submission — a slow load, a JS hiccup,
+        a calculator that shows its own default figures before the form is
+        touched — could still leave a non-empty payslip table for
+        `_parse_payslip` to read as if it were real. `TaxResult.success`
+        only checks `bool(self.payslip)`, so a non-empty-but-STALE table
+        would otherwise be reported as a confident, silently wrong answer.
+
+        Gross pay carries no tax adjustment — it is exactly
+        `salary × periods-per-year` (see SALARY_PERIOD_MAP) with nothing
+        else affecting it — so this needs no live page access to verify;
+        it is pure arithmetic over data already parsed. Any real mismatch
+        beyond a small rounding allowance can only mean the page never
+        updated for what was actually submitted.
+
+        Raises ValueError on a mismatch — caught by `scrape()`'s existing
+        per-attempt retry loop, exactly like every other validity check
+        there (e.g. "Payslip table parsed as empty").
+        """
+        gross_row = summary.get("Gross Pay") or {}
+        actual = ListenToTaxmanScraper._parse_money(gross_row.get("yearly", ""))
+        if actual is None:
+            raise ValueError(
+                "Could not find/parse a 'Gross Pay' row in the results — "
+                "page structure may have changed."
+            )
+
+        periods_per_year = int(SALARY_PERIOD_MAP.get(cfg.salary_period, "12"))
+        expected = float(cfg.salary) * periods_per_year
+
+        # Rounding allowance, not a real tolerance for error: gross has no
+        # tax adjustment, so this only needs to absorb the site's own
+        # display rounding, never a genuine discrepancy.
+        tolerance = max(1.0, abs(expected) * 0.005)
+        if abs(actual - expected) > tolerance:
+            raise ValueError(
+                f"Gross Pay did not reconcile with the submitted salary — "
+                f"submitted {cfg.salary} per {cfg.salary_period} (expected "
+                f"annual £{expected:,.2f}) but the page showed £{actual:,.2f} "
+                f"yearly. The results most likely never updated for this "
+                f"submission."
+            )
 
     # ── screenshot ────────────────────────────────────────────────────────────
     def _take_screenshot(self, salary: int | str) -> str:
