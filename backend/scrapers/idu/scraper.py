@@ -392,22 +392,37 @@ class IDUScraper:
                         logger.info("No addressmatch found; continuing")
 
                 self.page.click("#inputbut")
-                
-                # Wait for results page to fully render
+
+                # Wait for results page to fully render. #result-summary-status is
+                # the SAME element parse_verdict() reads for every outcome — a
+                # genuine "no match" still renders it (the text inside just says
+                # "No Match Found"); it only fails to appear at all when something
+                # went wrong before the results page was reached — dropped/expired
+                # session redirecting to login or MFA, TraceSmart being slow or
+                # down, or the page layout changing. So a timeout here is never a
+                # legitimate zero-result search. Raise instead of fabricating a
+                # clean "No Match Found" result, so this attempt is handled by the
+                # per-attempt retry loop below (which re-runs _ensure_logged_in()
+                # on the next attempt) and, if every attempt fails, surfaces as a
+                # real `error` on the returned IDUResult instead of masking the
+                # cause as an ordinary no-match.
                 logger.info("Form submitted, waiting for results to render...")
                 try:
                     self.page.wait_for_selector("#result-summary-status", timeout=15000)
                 except Exception:
-                    logger.warning("0 results found (timeout waiting for #result-summary-status). Returning No Matches.")
-                    return IDUResult(
-                        config = (config.__dict__ if hasattr(config, "__dict__") else {}),
-                        scraped_at = time.strftime("%Y-%m-%d %H:%M:%S"),
-                        search_id = None,
-                        verdict = "No Match Found",
-                        score = "N/A",
-                        summary_items = [],
-                        screenshot_url = None,
-                        error = None
+                    current_url = self.page.url
+                    try:
+                        page_title = self.page.title()
+                    except Exception:
+                        page_title = "<unavailable>"
+                    logger.warning(
+                        "Results did not render within 15s (no #result-summary-status found). "
+                        "URL: %s | Title: %s — treating as a failed search attempt, not a genuine no-match.",
+                        current_url, page_title,
+                    )
+                    raise RuntimeError(
+                        f"IDU results page did not render after search submit "
+                        f"(url={current_url!r}, title={page_title!r})"
                     )
                 
                 # Ensure all dynamic result sections are fully loaded
