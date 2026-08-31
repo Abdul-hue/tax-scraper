@@ -54,7 +54,7 @@ class IDUScraper:
         if headless is None:
             # Check for IDU-specific headless setting first, then global
             env_val = os.getenv("IDU_HEADLESS", os.getenv("HEADLESS", "True")).lower()
-            self.headless = False # (env_val == "true")
+            self.headless = (env_val == "true")
         else:
             self.headless = headless
 
@@ -127,17 +127,30 @@ class IDUScraper:
                 try:
                     otp_send_btn = self.page.locator('[data-testid="otp-send"]')
                     if otp_send_btn.is_visible(timeout=3000):
-                        if otp_guard.otp_send_allowed():
-                            logger.info("Clicking 'Send One Time Password' automatically...")
-                            _otp_trigger_time = time.time()
-                            otp_send_btn.click()
-                            otp_guard.mark_otp_sent()
-                            self.page.wait_for_load_state("networkidle", timeout=15000)
-                        else:
-                            # An OTP was requested very recently (elsewhere) —
-                            # don't ask Tracesmart to resend, just wait for
-                            # that email to arrive instead.
-                            _otp_trigger_time = time.time() - otp_guard.seconds_since_last_otp()
+                        if not otp_guard.otp_send_allowed():
+                            # An OTP was requested very recently — elsewhere,
+                            # or by an earlier attempt in this same task's
+                            # retry loop. We must NOT skip the click though:
+                            # this is a freshly-loaded page that has never
+                            # sent its own OTP, and Tracesmart only reveals
+                            # [data-testid="otp-code"] after *this* page
+                            # clicks "Send OTP" — skipping it here means the
+                            # wait below times out deterministically, every
+                            # time. Instead, wait out the rest of the
+                            # cooldown so we still respect the same minimum
+                            # spacing between real sends, then send from here.
+                            wait_for = otp_guard.OTP_MIN_INTERVAL_SECONDS - otp_guard.seconds_since_last_otp()
+                            if wait_for > 0:
+                                logger.info(
+                                    "OTP cooldown active — waiting %.0fs before sending "
+                                    "from this page...", wait_for,
+                                )
+                                time.sleep(wait_for)
+                        logger.info("Clicking 'Send One Time Password' automatically...")
+                        _otp_trigger_time = time.time()
+                        otp_send_btn.click()
+                        otp_guard.mark_otp_sent()
+                        self.page.wait_for_load_state("networkidle", timeout=15000)
                     else:
                         logger.debug("OTP send button not found — may not be required")
                 except Exception:
