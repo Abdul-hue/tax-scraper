@@ -15,6 +15,19 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
+# Third-party SDKs/libraries are extremely chatty at DEBUG (full request/response
+# dumps, per-hook signing internals, connection-pool churn, etc). Cap them to
+# WARNING regardless of our own LOG_LEVEL so app/scraper logs stay readable even
+# when LOG_LEVEL=DEBUG is used to debug our own code.
+for _noisy_logger in (
+    "botocore",
+    "boto3",
+    "urllib3",
+    "s3transfer",
+    "asyncio",
+):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
+
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
