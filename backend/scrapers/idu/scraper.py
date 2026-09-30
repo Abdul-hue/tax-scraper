@@ -275,7 +275,7 @@ class IDUScraper:
             logger.exception("Error during login flow")
             raise
 
-    def _click_address_match_link(self, house: str, postcode: str) -> None:
+    def _click_address_match_link(self, house: str, postcode: str, street: str = "") -> None:
         """Find and click the correct address link in IDU's #addressmatch list.
 
         Delegates matching to :func:`match_address_link` which uses exact then
@@ -292,7 +292,9 @@ class IDUScraper:
             "els => els.map(e => ({text: e.textContent.trim()}))",
         )
 
-        best_idx, best_link = match_address_link(house, links)
+        # The street tells apart two addresses with the same house segment
+        # (FLAT 7 in two buildings at one postcode) -- see match_address_link.
+        best_idx, best_link = match_address_link(house, links, street=street)
         logger.info("Address match: clicking link %d %r", best_idx, best_link["text"])
         self.page.locator("#addressmatch a").nth(best_idx).click()
 
@@ -392,7 +394,8 @@ class IDUScraper:
                 self.page.click("#addchk")
                 if config.house:
                     try:
-                        self._click_address_match_link(config.house, config.postcode or "")
+                        self._click_address_match_link(config.house, config.postcode or "",
+                                                       street=config.street or "")
                     except NoAddressMatchError:
                         raise
                     except Exception:

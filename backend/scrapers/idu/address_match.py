@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 class NoAddressMatchError(Exception):
     """Raised when house cannot be matched to a unique link in IDU's #addressmatch list."""
@@ -56,59 +58,99 @@ def _link_house_matches_config(config_house: str, link_house: str) -> bool:
     return True
 
 
-def match_address_link(house: str, links: list) -> tuple:
+#: Words for the same thing: a flat. TraceSmart lists a flat as "FLAT 7" or
+#: "APARTMENT 7"; the case may say either, or "Apt 7". Compared as one word.
+_FLAT_SYNONYMS = {"APARTMENT": "FLAT", "APT": "FLAT", "FLT": "FLAT"}
+
+
+def _normalise_house(text: str) -> str:
+    """Upper-cased, dots dropped, flat synonyms folded to FLAT."""
+    tokens = text.replace(".", " ").upper().split()
+    return " ".join(_FLAT_SYNONYMS.get(t, t) for t in tokens)
+
+
+def _words(text: str) -> set:
+    """The alphanumeric words of an address, upper-cased ("46", "FOO", ...)."""
+    return set(re.findall(r"[A-Z0-9]+", (text or "").upper()))
+
+
+def _starts_with_number(config_house: str, link_house: str) -> bool:
+    """A plain house number ("7") that begins the link's house segment
+    ("7 MAIN ROAD") -- not one found after a flat word ("FLAT 7")."""
+    config_tokens, link_tokens = config_house.split(), link_house.split()
+    return (len(config_tokens) == 1 and bool(link_tokens)
+            and _token_match(config_tokens[0], link_tokens[0]))
+
+
+def _pick(house: str, links: list, ranked: list) -> tuple:
+    """The top of *ranked* (score, idx, link), or an error on a real tie.
+    Two tied links with the SAME text are one address listed twice."""
+    ranked.sort(key=lambda r: r[0], reverse=True)
+    top = [r for r in ranked if r[0] == ranked[0][0]]
+    if len({r[2]["text"].strip().upper() for r in top}) > 1:
+        raise NoAddressMatchError(
+            f"Ambiguous match for '{house}': {[r[2]['text'] for r in top]} fit "
+            f"equally well. Check the flat / house number and street on the case. "
+            f"Available options: {[lnk['text'] for lnk in links]}"
+        )
+    _, idx, link = top[0]
+    return idx, link
+
+
+def match_address_link(house: str, links: list, street: str = "") -> tuple:
     """Return ``(index, link)`` for the best match of *house* in *links*.
 
     Each link dict must have a ``"text"`` key whose value follows IDU's
     ``"<house>, <street>, <town>"`` address format.  The house segment is
     everything before the first comma.
 
+    *street* is the rest of the case's address ("44 Foo Street", "Ferry
+    House, Main Road"). It tells apart addresses whose house segment is the
+    same -- ⚠️ one postcode can hold FLAT 7 in two buildings, and matching on
+    "FLAT 7" alone took the first one listed, the wrong building half the time.
+
     Matching priority
     -----------------
-    1. Exact match on the normalised house segment.
-    2. Token match with the alphanumeric-suffix rule (see :func:`_token_match`).
-    3. Among token-matches pick the one with the *shortest* house segment (most
-       specific).  An equal-length tie is treated as ambiguous → raises error.
+    1. Exact match on the normalised house segment ("APARTMENT"/"APT" count as
+       "FLAT"). Several exact matches: the one sharing the most *street* words.
+    2. Otherwise a token match with the alphanumeric-suffix rule (see
+       :func:`_token_match`), ranked by: most *street* words shared; then a
+       plain house number that BEGINS the house segment ("7" -> "7 MAIN
+       ROAD" over "FLAT 7"); then the *shortest* house segment.
+    3. A tie on all of that between different addresses is ambiguous -> error.
+       Never a guess.
 
     Raises
     ------
     NoAddressMatchError
-        Zero matches found, or an ambiguous equal-length tie.
+        Zero matches found, or an ambiguous tie.
     """
-    config_house = house.strip().upper()
+    config_house = _normalise_house(house)
+    street_words = _words(street) - _words(config_house)
 
-    # Step 2 — exact match on the normalised house segment
-    for idx, link in enumerate(links):
-        link_house = link["text"].split(",")[0].strip().upper()
-        if link_house == config_house:
-            return idx, link
+    def street_score(link):
+        return len(street_words & _words(link["text"]))
 
-    # Step 3 — token match with alphanumeric-suffix rule
-    candidates: list[tuple[int, dict, str]] = []
-    for idx, link in enumerate(links):
-        link_house = link["text"].split(",")[0].strip().upper()
-        if _link_house_matches_config(config_house, link_house):
-            candidates.append((idx, link, link_house))
+    houses = [(idx, link, _normalise_house(link["text"].split(",")[0]))
+              for idx, link in enumerate(links)]
 
+    # Step 1 — exact match on the normalised house segment
+    exact = [(street_score(link), idx, link) for idx, link, link_house in houses
+             if link_house == config_house]
+    if exact:
+        return _pick(house, links, exact)
+
+    # Step 2 — token match with alphanumeric-suffix rule
+    candidates = [
+        ((street_score(link), _starts_with_number(config_house, link_house), -len(link_house)),
+         idx, link)
+        for idx, link, link_house in houses
+        if _link_house_matches_config(config_house, link_house)
+    ]
     if not candidates:
         available = [lnk["text"] for lnk in links]
         raise NoAddressMatchError(
             f"Could not find '{house}' in address list. "
             f"Available options: {available}"
         )
-
-    # Step 4 — shortest house segment wins; equal-length tie → ambiguous error
-    min_len = min(len(c[2]) for c in candidates)
-    shortest = [c for c in candidates if len(c[2]) == min_len]
-
-    if len(shortest) > 1:
-        available = [lnk["text"] for lnk in links]
-        raise NoAddressMatchError(
-            f"Ambiguous match for '{house}': candidates {[c[2] for c in shortest]} "
-            f"have equal-length house segments. "
-            f"Specify the full value (e.g. '2A') to disambiguate. "
-            f"Available options: {available}"
-        )
-
-    best_idx, best_link, _ = shortest[0]
-    return best_idx, best_link
+    return _pick(house, links, candidates)

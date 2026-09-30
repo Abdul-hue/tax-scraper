@@ -313,5 +313,93 @@ class TestMatchAddressLink(unittest.TestCase):
         self.assertEqual(idx, 2)
 
 
+# ---------------------------------------------------------------------------
+# Flats — the street tells buildings apart (2026-09-30)
+# ---------------------------------------------------------------------------
+
+#: One postcode, two buildings, each with a FLAT 7.
+TWO_BUILDINGS = _links(
+    "FLAT 7, 44 FOO STREET, LEEDS",
+    "FLAT 7, 46 FOO STREET, LEEDS",
+    "FLAT 8, 44 FOO STREET, LEEDS",
+    "44 FOO STREET, LEEDS",
+)
+#: One block and a house on the same postcode.
+BLOCK_AND_HOUSE = _links(
+    "FLAT 1, FERRY HOUSE, MAIN ROAD, HULL",
+    "FLAT 7, FERRY HOUSE, MAIN ROAD, HULL",
+    "FLAT 17, FERRY HOUSE, MAIN ROAD, HULL",
+    "7 MAIN ROAD, HULL",
+)
+
+
+class TestFlatsWithStreet(unittest.TestCase):
+    """`house` and `street` are what CAT sends (`platform/scrapers.py ::
+    split_idu_address`)."""
+
+    def pick(self, house, street, links):
+        return match_address_link(house, links, street=street)[1]["text"]
+
+    def test_the_building_number_picks_the_right_flat_7(self):
+        self.assertEqual(self.pick("Flat 7", "44 Foo Street", TWO_BUILDINGS), "FLAT 7, 44 FOO STREET, LEEDS")
+        self.assertEqual(self.pick("Flat 7", "46 Foo Street", TWO_BUILDINGS), "FLAT 7, 46 FOO STREET, LEEDS")
+
+    def test_whatever_order_the_list_is_in(self):
+        reversed_links = list(reversed(TWO_BUILDINGS))
+        self.assertEqual(self.pick("Flat 7", "44 Foo Street", reversed_links), "FLAT 7, 44 FOO STREET, LEEDS")
+        self.assertEqual(self.pick("Flat 7", "46 Foo Street", reversed_links), "FLAT 7, 46 FOO STREET, LEEDS")
+
+    def test_a_building_number_is_a_whole_word(self):
+        links = _links("FLAT 7, 146 FOO STREET, LEEDS", "FLAT 7, 46 FOO STREET, LEEDS")
+        self.assertEqual(self.pick("Flat 7", "46 Foo Street", links), "FLAT 7, 46 FOO STREET, LEEDS")
+
+    def test_two_flat_7s_and_no_street_is_an_error_not_a_guess(self):
+        with self.assertRaises(NoAddressMatchError):
+            match_address_link("Flat 7", TWO_BUILDINGS)
+
+    def test_two_flat_7s_the_street_cannot_split_is_an_error(self):
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Flat 7", "Foo Street", TWO_BUILDINGS)
+
+    def test_the_same_address_listed_twice_is_one_address(self):
+        links = _links("FLAT 7, 44 FOO STREET, LEEDS", "FLAT 7, 44 FOO STREET, LEEDS")
+        idx, _ = match_address_link("Flat 7", links, street="44 Foo Street")
+        self.assertEqual(idx, 0)
+
+    def test_the_building_name_picks_the_block(self):
+        self.assertEqual(self.pick("Flat 7", "Ferry House, Main Road", BLOCK_AND_HOUSE),
+                         "FLAT 7, FERRY HOUSE, MAIN ROAD, HULL")
+
+    def test_a_flat_written_as_a_bare_number_with_its_building(self):
+        """ "7 Ferry House, Main Road": the number is the flat."""
+        self.assertEqual(self.pick("7", "Ferry House, Main Road", BLOCK_AND_HOUSE),
+                         "FLAT 7, FERRY HOUSE, MAIN ROAD, HULL")
+
+    def test_a_plain_house_7_is_not_someone_elses_flat_7(self):
+        self.assertEqual(self.pick("7", "Main Road", BLOCK_AND_HOUSE), "7 MAIN ROAD, HULL")
+
+    def test_the_house_itself_when_no_flat_is_given(self):
+        self.assertEqual(self.pick("44", "Foo Street", TWO_BUILDINGS), "44 FOO STREET, LEEDS")
+
+    def test_apartment_and_apt_are_flat(self):
+        for house in ("Apartment 7", "Apt 7", "Apt. 7", "APARTMENT 7"):
+            self.assertEqual(self.pick(house, "Ferry House, Main Road", BLOCK_AND_HOUSE),
+                             "FLAT 7, FERRY HOUSE, MAIN ROAD, HULL", house)
+
+    def test_a_flat_listed_as_apartment_is_found_by_flat(self):
+        links = _links("APARTMENT 7, RIVER VIEW, HULL", "APARTMENT 17, RIVER VIEW, HULL")
+        self.assertEqual(self.pick("Flat 7", "River View", links), "APARTMENT 7, RIVER VIEW, HULL")
+
+    def test_flat_7_never_takes_flat_17_or_70(self):
+        links = _links("FLAT 17, 44 FOO STREET, LEEDS", "FLAT 70, 44 FOO STREET, LEEDS")
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Flat 7", "44 Foo Street", links)
+
+    def test_street_never_overrides_an_exact_flat(self):
+        """An exact FLAT 7 wins over FLAT 7A even where 7A shares more of the street."""
+        links = _links("FLAT 7, 44 FOO STREET, LEEDS", "FLAT 7A, 46 FOO STREET, LEEDS")
+        self.assertEqual(self.pick("Flat 7", "46 Foo Street", links), "FLAT 7, 44 FOO STREET, LEEDS")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
