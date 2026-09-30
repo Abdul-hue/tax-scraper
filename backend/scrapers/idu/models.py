@@ -50,6 +50,9 @@ class PEPEntry:
     country: str = ""
     position: str = ""
     reason: str = ""
+    #: Which sub-section of TraceSmart's "PEP & Sanction" heading the match
+    #: was listed under: "pep" or "sanction" ("Sanction List"). "" = unknown.
+    list_type: str = ""
 
 
 @dataclass

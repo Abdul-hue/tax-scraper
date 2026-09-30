@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from bs4 import BeautifulSoup
 from typing import List, Dict, Tuple
 from .models import SummaryItem, PEPEntry
@@ -91,12 +93,142 @@ def parse_dob_verification(soup: BeautifulSoup) -> Dict:
     return _parse_rows(container)
 
 
+#: The two sub-headings inside TraceSmart's "PEP & Sanction" section.
+_PEP_SUBSECTIONS = {"pep": "pep", "peps": "pep", "sanction list": "sanction",
+                    "sanctions list": "sanction", "sanctions": "sanction"}
+#: A match block's labels -> PEPEntry fields.
+_PEP_LABELS = {
+    "match score": "match_score", "score": "match_score", "name": "name",
+    "aliases": "aliases", "alias": "aliases", "last updated": "last_updated",
+    "addresses": "addresses", "address": "addresses", "country": "country",
+    "countries": "country", "position": "position", "positions": "position",
+    "reason": "reason", "reasons": "reason",
+}
+_PEP_LIST_FIELDS = {"aliases", "addresses"}
+#: Footer / navigation lines inside the section, never part of a match.
+_PEP_NOISE = ("powered by", "back to top", "lexisnexis")
+
+
+def _pep_norm(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9& ]+", " ", text.lower())).strip()
+
+
 def parse_pep_sanctions(soup: BeautifulSoup):
+    """(entries, sanction_result) from the "PEP & Sanction" section.
+
+    ⚠️ TWO SUB-SECTIONS, EACH WITH ITS OWN WorldCompliance LINE:
+
+        PEP            WorldCompliance(tm): No matches found | the match blocks
+        Sanction List  WorldCompliance(tm): No matches found | the match blocks
+
+    Read in page order from the section's TEXT, split at those sub-headings,
+    so the result does not hang on CSS classes. The class-based reader
+    (`_parse_pep_sanctions_by_class`) dropped every match on a real PEP hit
+    and took `sanction_result` from the FIRST WorldCompliance line -- the PEP
+    one -- so a sanctions hit behind a clean PEP line read as "No matches
+    found". It is kept only for a layout with neither sub-heading.
+
+    Each entry carries `list_type` ("pep" / "sanction"). `sanction_result` is
+    the Sanction List's own WorldCompliance line, or a summary of its matches.
+    """
+    container = _pep_section(soup)
+    if container is None:
+        return [], ""
+    lines = []
+    for ln in (x.strip() for x in container.get_text("\n").split("\n")):
+        if not ln:
+            continue
+        # "WorldCompliance" + "™" + ":" arrive as separate text nodes when the
+        # mark is its own element -- a line of symbols only joins the last one.
+        if lines and not _pep_norm(ln):
+            lines[-1] += ln
+        else:
+            lines.append(ln)
+    if not any(_pep_norm(ln) in _PEP_SUBSECTIONS for ln in lines):
+        return _parse_pep_sanctions_by_class(container)
+
+    entries: List[PEPEntry] = []
+    status: Dict[str, str] = {}
+    section = None
+    entry = None
+    pending = None          # the field the next value line belongs to
+
+    def flush():
+        nonlocal entry
+        if entry is not None and (entry.name or entry.match_score or entry.reason or entry.position):
+            entries.append(entry)
+        entry = None
+
+    for line in lines:
+        norm = _pep_norm(line)
+        if norm in _PEP_SUBSECTIONS:
+            flush()
+            section, pending = _PEP_SUBSECTIONS[norm], None
+            continue
+        # The footer's bare "WorldCompliance(tm)" -- the LABEL has a colon.
+        footer_mark = ":" not in line and norm in ("worldcompliance", "worldcompliance tm")
+        if section is None or norm.startswith(_PEP_NOISE) or footer_mark:
+            continue
+        label, _, rest = line.partition(":")
+        key = _pep_norm(label) if _ else ""
+        if key.startswith("worldcompliance"):
+            pending = "__status__"
+            if rest.strip():
+                status[section] = rest.strip()
+                pending = None
+            continue
+        if key in _PEP_LABELS:
+            field_name = _PEP_LABELS[key]
+            if entry is None or (field_name in ("match_score", "name") and getattr(entry, field_name)):
+                flush()
+                entry = PEPEntry(list_type=section)
+            pending = field_name
+            line = rest.strip()
+            if not line:
+                continue
+        elif _ and not rest.strip() and len(key) < 40:
+            pending = None                      # a label this reader doesn't know
+            continue
+        if pending == "__status__":
+            status[section] = line
+            pending = None
+        elif pending and entry is not None:
+            if pending in _PEP_LIST_FIELDS:
+                getattr(entry, pending).append(line)
+            else:
+                current = getattr(entry, pending)
+                setattr(entry, pending, f"{current} {line}".strip())
+    flush()
+
+    sanctions = [e for e in entries if e.list_type == "sanction"]
+    if sanctions:
+        sanction_result = f"{len(sanctions)} match(es): " + "; ".join(
+            f"{e.name or 'unnamed'}" + (f" ({e.reason})" if e.reason else "") for e in sanctions)
+    else:
+        sanction_result = status.get("sanction", "")
+    return entries, sanction_result
+
+
+def _pep_section(soup: BeautifulSoup):
+    """The PEP & Sanction section body: `#res-sanction-body`, or the block
+    that follows a "PEP & Sanction" heading."""
     container = soup.select_one("#res-sanction-body")
+    if container is not None:
+        return container
+    for heading in soup.find_all(string=re.compile(r"PEP\s*&\s*Sanction", re.I)):
+        parent = heading.find_parent(class_=re.compile("heading"))
+        if parent is not None:
+            body = parent.find_next_sibling()
+            if body is not None:
+                return body
+    return None
+
+
+def _parse_pep_sanctions_by_class(container):
+    """The original class-based reader -- only for a layout without the PEP /
+    Sanction List sub-headings."""
     entries: List[PEPEntry] = []
     sanction_result = ""
-    if not container:
-        return entries, sanction_result
     rows = [r for r in container.select(".res-profile-row")]
     for row in rows:
         # skip bottom-row if present
