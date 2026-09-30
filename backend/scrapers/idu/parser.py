@@ -138,12 +138,17 @@ def parse_pep_sanctions(soup: BeautifulSoup):
     for ln in (x.strip() for x in container.get_text("\n").split("\n")):
         if not ln:
             continue
-        # "WorldCompliance" + "™" + ":" arrive as separate text nodes when the
-        # mark is its own element -- a line of symbols only joins the last one.
-        if lines and not _pep_norm(ln):
-            lines[-1] += ln
-        else:
-            lines.append(ln)
+        # ⚠️ A LINE OF SYMBOLS ONLY IS AN ICON, NOT TEXT -- TraceSmart's cross /
+        # tick / info marks (✖ ⊗ × ✔ ⓘ) sit in their own element between a
+        # label and its value. Joined onto "WorldCompliance™:" the cross became
+        # the Sanction List's "result" and CAT raised a false sanctions hard
+        # block (383022, 2026-09-30). Dropped -- except a split-off ":", which
+        # still closes its label ("WorldCompliance" + "™" + ":").
+        if not _pep_norm(ln):
+            if ":" in ln and lines:
+                lines[-1] += ":"
+            continue
+        lines.append(ln)
     if not any(_pep_norm(ln) in _PEP_SUBSECTIONS for ln in lines):
         return _parse_pep_sanctions_by_class(container)
 
@@ -167,13 +172,14 @@ def parse_pep_sanctions(soup: BeautifulSoup):
             continue
         # The footer's bare "WorldCompliance(tm)" -- the LABEL has a colon.
         footer_mark = ":" not in line and norm in ("worldcompliance", "worldcompliance tm")
-        if section is None or norm.startswith(_PEP_NOISE) or footer_mark:
+        # An info icon rendered as a letter ("i") must never join a field.
+        if section is None or norm.startswith(_PEP_NOISE) or footer_mark or len(line) == 1:
             continue
         label, _, rest = line.partition(":")
         key = _pep_norm(label) if _ else ""
         if key.startswith("worldcompliance"):
             pending = "__status__"
-            if rest.strip():
+            if _pep_norm(rest):                 # a status in words, not an icon
                 status[section] = rest.strip()
                 pending = None
             continue

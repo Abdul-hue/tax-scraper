@@ -111,6 +111,48 @@ class PepSanctionsTests(unittest.TestCase):
                          [("Rebecca Hyde", "National:PEP:Family Member")])
         self.assertEqual(sanction, "No matches found")
 
+    def test_the_live_383022_page(self):
+        """Rebecca Hyde's TraceSmart page, 28/09/2026, field for field -- an
+        info icon (as the letter "i") before Match Score and each sub-heading."""
+        icon = '<span class="icon-info">i</span>'
+        pep = (_row(f"{icon}Match Score:", "100") + _row("Name:", "Rebecca Hyde")
+               + _row("Last Updated:", "02/07/2026") + _row("Addresses:", "<ul><li>Canada</li></ul>")
+               + _row("Country:", "Canada")
+               + _row("Position:", "<ul><li>Mother of Dane Lloyd, Member of Parliament of Canada.</li></ul>")
+               + _row("Reason:", "National PEP Family Member"))
+        soup = BeautifulSoup(
+            f'<div id="res-sanction-body">{_sub(icon + "PEP")}{pep}'
+            f'{_sub(icon + "Sanction List")}{NO_MATCH}{FOOTER}</div>', "html.parser")
+        entries, sanction = parse_pep_sanctions(soup)
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertEqual(
+            (e.match_score, e.name, e.last_updated, e.addresses, e.country, e.position, e.reason, e.list_type),
+            ("100", "Rebecca Hyde", "02/07/2026", ["Canada"], "Canada",
+             "Mother of Dane Lloyd, Member of Parliament of Canada.", "National PEP Family Member", "pep"))
+        self.assertEqual(sanction, "No matches found")
+
+    def test_the_cross_icon_is_never_the_sanction_result(self):
+        """383022: the (x) beside "No matches found" became the Sanction List
+        result, and CAT raised a false sanctions hard block."""
+        for glyph in ("✖", "⊗", "×", "✘", "ⓧ"):
+            def crossed(label, value):
+                return (f'<div class="res-profile-row"><div class="res-profile-item">{label}</div>'
+                        f'<div class="res-profile-val-icon">{glyph}</div>'
+                        f'<div class="res-profile-val-norm">{value}</div></div>')
+            clean = crossed("WorldCompliance&trade;:", "No matches found")
+            entries, sanction = parse_pep_sanctions(_page(REBECCA, clean))
+            self.assertEqual(sanction, "No matches found", ascii(glyph))
+            self.assertEqual([(e.name, e.list_type) for e in entries], [("Rebecca Hyde", "pep")])
+            entries, sanction = parse_pep_sanctions(_page(clean, clean))
+            self.assertEqual((entries, sanction), ([], "No matches found"), ascii(glyph))
+
+    def test_a_split_off_colon_still_closes_the_label(self):
+        split = ('<div class="res-profile-row"><div class="res-profile-item">WorldCompliance'
+                 '<sup>&trade;</sup><span>:</span></div>'
+                 '<div class="res-profile-val-norm">No matches found</div></div>')
+        self.assertEqual(parse_pep_sanctions(_page(NO_MATCH, split))[1], "No matches found")
+
     def test_no_section_is_nothing(self):
         self.assertEqual(parse_pep_sanctions(BeautifulSoup("<div></div>", "html.parser")), ([], ""))
 
