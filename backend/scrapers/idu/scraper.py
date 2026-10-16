@@ -4,7 +4,7 @@ from typing import List, Optional
 from pathlib import Path
 import logging
 import time
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urljoin
 
 from playwright.sync_api import sync_playwright, Page, BrowserContext
 from app.core.s3 import upload_screenshot_to_s3_sync
@@ -304,6 +304,160 @@ class IDUScraper:
         except Exception:
             self.page.click("#confirm-yes")
 
+    # Tags every results-page control that could produce TraceSmart's report
+    # PDF (mPDF-generated server-side, titled "IDU-<search_id>") and returns a
+    # description of each so the choice — and any miss — shows up in the logs.
+    _PDF_CANDIDATE_JS = """
+        () => {
+            const els = document.querySelectorAll(
+                'a, button, input[type=button], input[type=submit], input[type=image], [onclick]'
+            );
+            const out = [];
+            els.forEach((el, i) => {
+                const text = (el.innerText || el.value || el.title || el.alt || '').trim().slice(0, 80);
+                const href = el.getAttribute('href') || '';
+                const onclick = el.getAttribute('onclick') || '';
+                const blob = [text, href, onclick, el.id, String(el.className || ''),
+                              el.title || '', el.getAttribute('data-testid') || ''].join(' ').toLowerCase();
+                if (/pdf|download|export|print/.test(blob)) {
+                    el.setAttribute('data-idu-pdf-candidate', String(i));
+                    out.push({
+                        idx: String(i), tag: el.tagName.toLowerCase(), text, href, onclick,
+                        id: el.id || '', mentions_pdf: /pdf/.test(blob),
+                        visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+                    });
+                }
+            });
+            return out;
+        }
+    """
+
+    @staticmethod
+    def _is_pdf(body: Optional[bytes]) -> bool:
+        return bool(body) and body[:5] == b"%PDF-"
+
+    def _fetch_pdf_url(self, url: str) -> Optional[bytes]:
+        """GET *url* with the logged-in context's cookies; return it only if it is a PDF."""
+        try:
+            resp = self.context.request.get(url, timeout=30000)
+            body = resp.body()
+        except Exception as e:
+            logger.info("IDU PDF: GET %s failed: %s", url, e)
+            return None
+        if resp.ok and self._is_pdf(body):
+            return body
+        logger.info(
+            "IDU PDF: %s is not a PDF (status=%s, content-type=%s)",
+            url, resp.status, resp.headers.get("content-type"),
+        )
+        return None
+
+    def _click_for_pdf(self, selector: str, wait_s: float) -> Optional[bytes]:
+        """Click *selector* and collect a PDF however TraceSmart delivers it:
+        a download (same tab or popup), a popup showing the PDF, or a PDF
+        network response."""
+        downloads, popups, pdf_responses = [], [], []
+
+        def on_download(dl):
+            downloads.append(dl)
+
+        def on_popup(p):
+            popups.append(p)
+            p.on("download", on_download)
+
+        def on_response(resp):
+            try:
+                if "application/pdf" in (resp.headers.get("content-type") or "").lower():
+                    pdf_responses.append(resp)
+            except Exception:
+                pass
+
+        self.page.on("download", on_download)
+        self.context.on("page", on_popup)
+        self.context.on("response", on_response)
+        try:
+            self.page.locator(selector).first.click(timeout=5000)
+            deadline = time.time() + wait_s
+            while time.time() < deadline and not (downloads or pdf_responses):
+                self.page.wait_for_timeout(250)
+
+            for resp in pdf_responses:
+                try:
+                    body = resp.body()
+                    if self._is_pdf(body):
+                        return body
+                except Exception:
+                    pass  # download responses often have no retrievable body
+            for dl in downloads:
+                try:
+                    body = Path(dl.path()).read_bytes()
+                    if self._is_pdf(body):
+                        return body
+                    logger.info("IDU PDF: download %r is not a PDF", dl.suggested_filename)
+                except Exception as e:
+                    logger.info("IDU PDF: could not read download: %s", e)
+            for p in popups:
+                if p.url and p.url != "about:blank":
+                    body = self._fetch_pdf_url(p.url)
+                    if body:
+                        return body
+            return None
+        except Exception as e:
+            logger.info("IDU PDF: clicking %s failed: %s", selector, e)
+            return None
+        finally:
+            self.page.remove_listener("download", on_download)
+            self.context.remove_listener("page", on_popup)
+            self.context.remove_listener("response", on_response)
+            for p in popups:
+                try:
+                    p.close()
+                except Exception:
+                    pass
+
+    def _capture_report_pdf(self, budget_s: float = 45.0) -> Optional[bytes]:
+        """Return TraceSmart's own report PDF for the results page currently
+        open, or None. Never raises — the screenshot remains the fallback.
+
+        Must run after the HTML/screenshot are captured: a candidate click
+        may navigate the results tab away.
+        """
+        try:
+            candidates = self.page.evaluate(self._PDF_CANDIDATE_JS)
+        except Exception as e:
+            logger.warning("IDU PDF: could not scan results page for PDF controls: %s", e)
+            return None
+        logger.info("IDU PDF: %d candidate control(s) on results page: %s", len(candidates), candidates)
+
+        # A bare window.print() button only opens the browser print dialog.
+        candidates = [
+            c for c in candidates
+            if c["mentions_pdf"] or "window.print" not in (c["onclick"] + c["href"]).lower()
+        ]
+        candidates.sort(key=lambda c: (not c["mentions_pdf"], not c["visible"]))
+
+        deadline = time.time() + budget_s
+        for c in candidates[:4]:
+            remaining = deadline - time.time()
+            if remaining <= 2:
+                break
+            href = c["href"].strip()
+            if href and not href.lower().startswith(("javascript:", "#", "mailto:")):
+                # A real link: fetch it directly rather than navigating the tab.
+                body = self._fetch_pdf_url(urljoin(self.page.url, href))
+            elif c["visible"]:
+                body = self._click_for_pdf(
+                    f'[data-idu-pdf-candidate="{c["idx"]}"]', wait_s=min(15.0, remaining)
+                )
+            else:
+                continue
+            if body:
+                logger.info("IDU PDF: captured report PDF (%d bytes) via %s", len(body), c)
+                return body
+
+        logger.warning("IDU PDF: no TraceSmart report PDF captured from results page %s", self.page.url)
+        return None
+
     def search(self, config: IDUConfig, screenshot: bool = False) -> IDUResult:
         """Run a single search for the provided config."""
         last_exc: Optional[Exception] = None
@@ -594,6 +748,19 @@ class IDUScraper:
                 qs = parse_qs(parsed.query)
                 search_id = qs.get("id", [""])[0]
 
+                # ── Step 7: TraceSmart's own report PDF ──────────────────────────
+                pdf_url = None
+                pdf_bytes = self._capture_report_pdf()
+                if pdf_bytes:
+                    _pdf_name = f"IDU-{search_id}.pdf" if search_id else f"IDU-{_ts}.pdf"
+                    try:
+                        pdf_url = upload_screenshot_to_s3_sync(
+                            pdf_bytes, _pdf_name, content_type="application/pdf"
+                        )
+                        logger.info("IDU: Report PDF uploaded to S3: %s", pdf_url)
+                    except Exception as e:
+                        logger.warning("IDU: Report PDF S3 upload failed: %s", e)
+
                 result = IDUResult(
                     config = (config.__dict__ if hasattr(config, "__dict__") else {}),
                     scraped_at = time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -615,6 +782,7 @@ class IDUScraper:
                     address_links = address_links,
                     property_detail = property_detail,
                     screenshot_url = screenshot_url,
+                    pdf_url = pdf_url,
                 )
 
                 return result

@@ -79,6 +79,8 @@ class IDUResult:
     address_links: List[Dict] = field(default_factory=list)
     property_detail: Dict = field(default_factory=dict)
     screenshot_url: Optional[str] = None
+    #: S3 URL of TraceSmart's own report PDF (IDU-<search_id>.pdf), if captured.
+    pdf_url: Optional[str] = None
     error: Optional[str] = None
 
     @property
@@ -110,6 +112,7 @@ class IDUResult:
             "address_links": self.address_links,
             "property_detail": self.property_detail,
             "screenshot_url": self.screenshot_url,
+            "pdf_url": self.pdf_url,
             "error": self.error,
         }
 

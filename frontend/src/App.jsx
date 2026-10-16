@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import axios from 'axios'
-import { Calculator, MapPin, Loader2, Camera, ExternalLink, Settings2, Car, Home, Building2, UserCheck, Users, Scale, Search } from 'lucide-react'
+import { Calculator, MapPin, Loader2, Camera, ExternalLink, Settings2, Car, Home, Building2, UserCheck, Users, Scale, Search, FileText } from 'lucide-react'
 
 function App() {
     const [activeTab, setActiveTab] = useState('taxman')
@@ -409,6 +409,60 @@ function App() {
                             src={url} alt="Scraper screenshot" 
                             style={{ width: '100%', borderRadius: 4, border: '1px solid #374151', cursor: 'zoom-in' }}
                             onClick={() => window.open(url, '_blank')}
+                        />
+                    </div>
+                )}
+            </div>
+        )
+    }
+
+    // Provider-issued report PDF (e.g. TraceSmart IDU). Open by default — it is
+    // the primary evidence, unlike the page screenshot.
+    const PdfPreview = ({ url, title = 'Official Report PDF' }) => {
+        const [expanded, setExpanded] = React.useState(true)
+        if (!url) return null
+        return (
+            <div style={{ marginTop: 16, border: '1px solid #374151', borderRadius: 8, overflow: 'hidden' }}>
+                <div
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '12px 16px',
+                        background: '#1f2937',
+                        cursor: 'pointer'
+                    }}
+                    onClick={() => setExpanded(!expanded)}
+                    onMouseEnter={e => e.currentTarget.style.background = '#374151'}
+                    onMouseLeave={e => e.currentTarget.style.background = '#1f2937'}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <FileText size={16} color="#58a6ff" />
+                        <span style={{ fontSize: '0.875rem', fontWeight: '500', color: '#e5e7eb' }}>{title}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <a
+                            href={url} target="_blank" rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            style={{
+                                fontSize: '0.75rem',
+                                color: '#58a6ff',
+                                textDecoration: 'none',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 4
+                            }}
+                        >
+                            <ExternalLink size={12} /> Open PDF
+                        </a>
+                        <span style={{ color: '#9ca3af', fontSize: '0.75rem' }}>{expanded ? '▲ Hide' : '▼ Show'}</span>
+                    </div>
+                </div>
+                {expanded && (
+                    <div style={{ background: '#0d1117', padding: 12 }}>
+                        <iframe
+                            src={url} title={title}
+                            style={{ width: '100%', height: 800, border: '1px solid #374151', borderRadius: 4, background: '#fff' }}
                         />
                     </div>
                 )}
@@ -1696,6 +1750,7 @@ function App() {
                                         </table>
                                     </div>
                                 )}
+                                <PdfPreview url={result.pdf_url} title="TraceSmart IDU Report (PDF)" />
                                 <ScreenshotPreview url={result.screenshot_url} />
                             </div>
                         )}

@@ -24,6 +24,47 @@ TARGET_URL = "https://www.nationwide.co.uk/house-price-index"
 _executor = ThreadPoolExecutor(max_workers=4)
 
 
+def _select_location(page, option_value, field_selector, timeout_ms=15000):
+    """Pick a location radio and confirm the form actually switched to it.
+
+    Two things silently swallow a plain Playwright click here, leaving the radio
+    on Region so the postcode field never appears:
+      - a click before React hydrates the form is discarded;
+      - OneTrust's banner / dark filter (which can inject after we removed it)
+        sits on top of the form, and even force=True clicks by coordinates.
+    So clear the overlay and click the element itself via JS, and keep going
+    until the radio stays checked and its dependent field (if any) is visible.
+    """
+    radio = f'input[type="radio"][value="{option_value}"]'
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        page.evaluate(
+            """(sel) => {
+                const sdk = document.getElementById('onetrust-consent-sdk');
+                if (sdk) sdk.remove();
+                document.querySelectorAll('.onetrust-pc-dark-filter').forEach(el => el.remove());
+                const r = document.querySelector(sel);
+                if (r) r.click();
+            }""",
+            radio,
+        )
+        try:
+            if field_selector:
+                page.wait_for_selector(field_selector, state="visible", timeout=1500)
+            else:
+                page.wait_for_timeout(750)
+            if page.is_checked(radio):
+                return
+        except Exception:
+            pass
+        if time.monotonic() > deadline:
+            raise RuntimeError(
+                f"Nationwide form did not switch to '{option_value}' "
+                f"within {timeout_ms // 1000}s (page not responding to the location choice)"
+            )
+        logger.info(f"Location '{option_value}' did not stick yet; retrying click")
+
+
 class NationwideScraper:
     def __init__(self, config=None, headless=True):
         self.config = config
@@ -69,7 +110,14 @@ class NationwideScraper:
                     page = context.new_page()
 
                     logger.info(f"Navigating to {TARGET_URL}")
-                    page.goto(TARGET_URL, wait_until="commit", timeout=45000)
+                    page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=45000)
+                    # The form is server-rendered then hydrated by React. Clicks made
+                    # before hydration are discarded (the radio snaps back to Region),
+                    # so give the page its full load before touching the form.
+                    try:
+                        page.wait_for_load_state("load", timeout=20000)
+                    except Exception:
+                        logger.debug("Page 'load' event slow; relying on location retry")
 
                     # Dismiss cookie consent if present
                     try:
@@ -90,24 +138,15 @@ class NationwideScraper:
 
                     # Location selection: postcode, region, or UK average
                     if query.postcode:
-                        # Select Postcode radio
-                        page.click('input[type="radio"][value="optionPostcode"]', force=True)
-                        page.wait_for_timeout(500)
-                        # Fill postcode input - wait for it to appear after radio click
-                        page.wait_for_selector('input[name="postcode"]', timeout=5000)
+                        _select_location(page, "optionPostcode", 'input[name="postcode"]')
                         page.fill('input[name="postcode"]', query.postcode)
                         page.wait_for_timeout(500)
                     elif query.region and query.region != 'UK':
-                        # Select Region radio
-                        page.click('input[type="radio"][value="optionRegion"]', force=True)
-                        page.wait_for_timeout(500)
-                        page.wait_for_selector('select[name="region"]', timeout=5000)
+                        _select_location(page, "optionRegion", 'select[name="region"]')
                         page.select_option('select[name="region"]', label=query.region)
                         page.wait_for_timeout(500)
                     else:
-                        # Select UK average radio
-                        page.click('input[type="radio"][value="optionUk"]', force=True)
-                        page.wait_for_timeout(500)
+                        _select_location(page, "optionUk", None)
 
                     # Fill form fields
                     page.fill('input[name="lastValuation"]', str(query.property_value))

@@ -508,11 +508,13 @@ GET /api/scrapers/idu/result/<session_id>
     "address_links": [],
     "property_detail": {},
     "screenshot_url": null,
+    "pdf_url": "https://<bucket>.s3.<region>.amazonaws.com/screenshots/IDU-3375101391.pdf",
     "error": null
   }
   ```
 - **Important note:** the IDU result model contains `config`, but the current `to_dict()` does not expose it, so `config` is not in the API response
-- **Frontend uses:** `verdict`, `score`, `search_id`, `date_of_search`, `summary_items`, `pep_entries`, `address_detail`, `credit_active`, `dob_verification`, `property_detail`, `ccj`, `insolvency`, `company_director`, `address_links`, `screenshot_url`
+- **Frontend uses:** `verdict`, `score`, `search_id`, `date_of_search`, `summary_items`, `pep_entries`, `address_detail`, `credit_active`, `dob_verification`, `property_detail`, `ccj`, `insolvency`, `company_director`, `address_links`, `screenshot_url`, `pdf_url`
+- **`pdf_url`:** TraceSmart's own report PDF (`IDU-<search_id>.pdf`), uploaded to S3; `null` if it could not be captured (the screenshot is still provided)
 
 ### 8. IDU scraper start OTP flow
 - **Endpoint:** `/scrapers/idu/start`
@@ -588,6 +590,7 @@ GET /api/scrapers/idu/result/<session_id>
       "address_links": [],
       "property_detail": {},
       "screenshot_url": null,
+      "pdf_url": null,
       "error": null
     }
   }
