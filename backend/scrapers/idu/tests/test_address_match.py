@@ -401,5 +401,153 @@ class TestFlatsWithStreet(unittest.TestCase):
         self.assertEqual(self.pick("Flat 7", "46 Foo Street", links), "FLAT 7, 44 FOO STREET, LEEDS")
 
 
+#: A postcode of named houses, numbers and a block.
+NAMED_HOUSES = _links(
+    "BATTERY HOUSE, STATION ROAD, ST. BLAZEY, PAR",
+    "ROSE COTTAGE, STATION ROAD, ST. BLAZEY, PAR",
+    "ROSE VILLA, STATION ROAD, ST. BLAZEY, PAR",
+    "1 STATION ROAD, ST. BLAZEY, PAR",
+    "12 STATION ROAD, ST. BLAZEY, PAR",
+    "FLAT 1, MILL COURT, STATION ROAD, PAR",
+)
+
+
+class TestWholeAddress(unittest.TestCase):
+    """⚠️ A named house was sent with no house, the scraper picked no address,
+    and TraceSmart never searched (430288, 421661, 2026-11-04)."""
+
+    def pick(self, house, street, links=NAMED_HOUSES):
+        return match_address_link(house, links, street=street)[1]["text"]
+
+    def test_a_named_house_sent_as_the_house(self):
+        """What CAT sends now (`split_idu_address`)."""
+        self.assertEqual(self.pick("Battery House", "Station Road, St. Blazey"),
+                         "BATTERY HOUSE, STATION ROAD, ST. BLAZEY, PAR")
+
+    def test_no_house_the_whole_address_picks_it(self):
+        """What CAT sent before -- and still sends with no comma."""
+        self.assertEqual(self.pick("", "BATTERY HOUSE, STATION ROAD, ST. BLAZEY"),
+                         "BATTERY HOUSE, STATION ROAD, ST. BLAZEY, PAR")
+        self.assertEqual(self.pick("", "Rose Cottage Station Road"),
+                         "ROSE COTTAGE, STATION ROAD, ST. BLAZEY, PAR")
+
+    def test_a_name_written_differently_still_found(self):
+        links = _links("THE OLD RECTORY CHURCH LANE, PAR", "1 CHURCH LANE, PAR")
+        self.assertEqual(self.pick("Old Rectory", "Church Lane", links), "THE OLD RECTORY CHURCH LANE, PAR")
+
+    def test_a_neighbour_never_stands_in(self):
+        """ROSE VILLA shares "Rose"; not Rose Cottage's address."""
+        links = _links("ROSE VILLA, STATION ROAD, PAR", "1 STATION ROAD, PAR")
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Rose Cottage", "Station Road", links)
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("", "Rose Cottage, Station Road", links)
+
+    def test_a_street_alone_picks_nothing(self):
+        with self.assertRaises(NoAddressMatchError) as err:
+            self.pick("", "Station Road, St. Blazey")
+        self.assertIn("Enter the House No/Name", str(err.exception))
+
+    def test_no_flat_in_a_block_is_guessed(self):
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("", "Mill Court, Station Road")
+
+    def test_flat_7_still_never_takes_flat_17_by_the_whole_address(self):
+        links = _links("FLAT 17, FERRY HOUSE, MAIN ROAD", "FLAT 70, FERRY HOUSE, MAIN ROAD")
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Flat 7", "Ferry House, Main Road", links)
+
+    def test_numbers_are_unchanged(self):
+        self.assertEqual(self.pick("12", "Station Road"), "12 STATION ROAD, ST. BLAZEY, PAR")
+        self.assertEqual(self.pick("1", "Station Road"), "1 STATION ROAD, ST. BLAZEY, PAR")
+
+    def test_nothing_at_all_is_an_error(self):
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("", "")
+
+
+#: TraceSmart's real lists from staging's failed runs (2026-11-10), trimmed.
+ANGEL_PLACE = _links(
+    "ROCKY'S, ANGEL PLACE, WORCESTER", "1 ANGEL PLACE, WORCESTER",
+    "FLAT 5, ANGEL HOTEL 10-12, ANGEL PLACE, WORCESTER",
+    "14 ANGEL PLACE, WORCESTER", "THE ANGEL, 14 ANGEL PLACE, WORCESTER",
+    "UNIT 1, 23 ANGEL PLACE, WORCESTER",
+    "FLAT 5, MONKSWELL HOUSE, 23 ANGEL PLACE, WORCESTER",
+)
+MERTON_ROAD = _links(
+    "118 MERTON ROAD, LONDON", "FLAT B-C, 118 MERTON ROAD, LONDON",
+    "136A MERTON ROAD, LONDON", "138 MERTON ROAD, LONDON",
+    "FLAT 1, 148 MERTON ROAD, LONDON",
+)
+VICTORIA_ROAD = _links(
+    "ASHLEIGH HOUSE, VICTORIA ROAD, BARNSTAPLE", "3 VICTORIA ROAD, BARNSTAPLE",
+    "3 TRESMERE COURT, VICTORIA ROAD, BARNSTAPLE", "4 VICTORIA ROAD, BARNSTAPLE",
+)
+CENTRIC_CLOSE = _links(
+    "5 CENTRIC CLOSE, OVAL ROAD, LONDON", "6 CENTRIC CLOSE, OVAL ROAD, LONDON",
+    "6 CENTRIC CLOSE, LONDON", "AUTOGLASS, 6 CENTRIC CLOSE, OVAL ROAD, LONDON",
+)
+
+
+class TestBuildingWhenTheFlatIsNotListed(unittest.TestCase):
+    """⚠️ Step 4 (2026-11-10): a flat or room TraceSmart does not hold, in a
+    building it does -- 9 of staging's 74 failed IDU runs."""
+
+    def pick(self, house, street, links):
+        return match_address_link(house, links, street=street)[1]["text"]
+
+    def test_a_room_takes_its_building(self):
+        self.assertEqual(self.pick("Room 5", "14 Angel Place", ANGEL_PLACE),
+                         "14 ANGEL PLACE, WORCESTER")
+
+    def test_a_flat_takes_its_building(self):
+        self.assertEqual(self.pick("Flat C", "138 Merton Road", MERTON_ROAD), "138 MERTON ROAD, LONDON")
+        self.assertEqual(self.pick("Flat 2", "3 Victoria Road", VICTORIA_ROAD),
+                         "3 VICTORIA ROAD, BARNSTAPLE")
+        self.assertEqual(self.pick("Bottom Flat", "13 Alexandra Road",
+                                   _links("12 ALEXANDRA ROAD, TORQUAY", "13 ALEXANDRA ROAD, TORQUAY")),
+                         "13 ALEXANDRA ROAD, TORQUAY")
+
+    def test_a_named_building_with_a_number(self):
+        self.assertEqual(self.pick("Flat 65", "Bagshot Manor, 1 Green Lane",
+                                   _links("BAGSHOT MANOR, 1 GREEN LANE, BAGSHOT")),
+                         "BAGSHOT MANOR, 1 GREEN LANE, BAGSHOT")
+
+    def test_the_same_building_listed_twice_is_one(self):
+        self.assertEqual(self.pick("Flat 5", "6 Centric Close", CENTRIC_CLOSE), "6 CENTRIC CLOSE, LONDON")
+
+    def test_never_a_neighbour_or_a_business_in_it(self):
+        """"3 TRESMERE COURT, VICTORIA ROAD" is not 3 Victoria Road; "THE
+        ANGEL, 14 ANGEL PLACE" is the pub, not the building."""
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Flat 2", "3 Victoria Road", _links("3 TRESMERE COURT, VICTORIA ROAD, BARNSTAPLE"))
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Room 5", "14 Angel Place", _links("THE ANGEL, 14 ANGEL PLACE, WORCESTER"))
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Flat C", "140 Merton Road", MERTON_ROAD)
+
+    def test_a_building_whose_flats_are_listed_is_an_error(self):
+        """The case's flat number is wrong, not missing."""
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Flat 7", "44 Foo Street",
+                      _links("44 FOO STREET, TOWN", "FLAT 1, 44 FOO STREET, TOWN", "FLAT 2, 44 FOO STREET, TOWN"))
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Flat B", "118 Merton Road", MERTON_ROAD)
+
+    def test_a_plain_house_never_falls_back(self):
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("5C", "Chester Road", _links("5 CHESTER ROAD, LONDON", "7 CHESTER ROAD, LONDON"))
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Rose Cottage", "14 Angel Place", ANGEL_PLACE)
+
+    def test_a_street_alone_is_no_building(self):
+        with self.assertRaises(NoAddressMatchError):
+            self.pick("Flat 7", "Main Road", _links("MAIN ROAD, TOWN", "1 MAIN ROAD, TOWN"))
+
+    def test_a_listed_flat_still_wins(self):
+        self.assertEqual(self.pick("Flat 5", "Monkswell House, 23 Angel Place", ANGEL_PLACE),
+                         "FLAT 5, MONKSWELL HOUSE, 23 ANGEL PLACE, WORCESTER")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

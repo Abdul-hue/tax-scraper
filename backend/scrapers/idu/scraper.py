@@ -546,20 +546,19 @@ class IDUScraper:
                     self.page.fill("#landline2", config.landline2)
 
                 self.page.click("#addchk")
-                if config.house:
-                    try:
-                        self._click_address_match_link(config.house, config.postcode or "",
-                                                       street=config.street or "")
-                    except NoAddressMatchError:
-                        raise
-                    except Exception:
-                        logger.info("No addressmatch found; continuing")
-                else:
-                    try:
-                        self.page.wait_for_selector("#addressmatch", timeout=10000)
-                        logger.info("addressmatch appeared but no house configured — skipping link selection")
-                    except Exception:
-                        logger.info("No addressmatch found; continuing")
+                # ⚠️ AN ADDRESS IS PICKED EVEN WITH NO HOUSE (2026-11-04). With
+                # no house this used to skip the pick and submit the form with
+                # NO address selected; TraceSmart never searched, and the run
+                # failed 15s later as "results page did not render" -- every
+                # client at a named house. The whole address is matched
+                # instead (`address_match.py`), or NoAddressMatchError says so.
+                try:
+                    self._click_address_match_link(config.house or "", config.postcode or "",
+                                                   street=config.street or "")
+                except NoAddressMatchError:
+                    raise
+                except Exception:
+                    logger.info("No addressmatch found; continuing")
 
                 self.page.click("#inputbut")
 
@@ -797,7 +796,9 @@ class IDUScraper:
                 except Exception as ss_err:
                     logger.warning(f"Failed to capture error screenshot: {ss_err}")
                 last_exc = exc
-                if attempt < self.retry_limit:
+                # No address matching the case is the same on every attempt --
+                # retrying only delays the advisor's error by a minute a time.
+                if attempt < self.retry_limit and not isinstance(exc, NoAddressMatchError):
                     backoff = 2 ** attempt
                     time.sleep(backoff)
                     continue

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 
 class NoAddressMatchError(Exception):
@@ -97,6 +100,33 @@ def _pick(house: str, links: list, ranked: list) -> tuple:
     return idx, link
 
 
+def _by_whole_address(house: str, links: list, street: str) -> list:
+    """Step 3: links that fit the case's WHOLE address, ranked by words shared.
+
+    ⚠️ FOR WHAT A HOUSE SEGMENT CANNOT MATCH (2026-11-04): no house at all
+    ("Rose Cottage Main Road" -- no comma, so the caller cannot tell the name
+    from the street), or a house name TraceSmart writes differently. With no
+    house the scraper used to submit the form with NO address picked, and
+    TraceSmart never searched ("IDU results page did not render").
+
+    A link fits only if BOTH hold, so it is never a guess at a neighbour:
+      - every word of its house segment is in the case's address -- "ROSE
+        VILLA" never stands in for Rose Cottage, nor "FLAT 1, ..." for a
+        building whose flat the case does not give;
+      - every word of the case's house is in the link -- "Flat 7" never takes
+        "FLAT 17".
+    """
+    case_words = _words(_normalise_house(f"{house} {street}"))
+    house_words = _words(_normalise_house(house))
+    ranked = []
+    for idx, link in enumerate(links):
+        link_words = _words(_normalise_house(link["text"]))
+        link_house = _words(_normalise_house(link["text"].split(",")[0]))
+        if link_house and link_house <= case_words and house_words <= link_words:
+            ranked.append((len(case_words & link_words), idx, link))
+    return ranked
+
+
 def match_address_link(house: str, links: list, street: str = "") -> tuple:
     """Return ``(index, link)`` for the best match of *house* in *links*.
 
@@ -117,7 +147,11 @@ def match_address_link(house: str, links: list, street: str = "") -> tuple:
        :func:`_token_match`), ranked by: most *street* words shared; then a
        plain house number that BEGINS the house segment ("7" -> "7 MAIN
        ROAD" over "FLAT 7"); then the *shortest* house segment.
-    3. A tie on all of that between different addresses is ambiguous -> error.
+    3. Nothing matched the house -- or there is no house -- the whole address
+       (:func:`_by_whole_address`), most words shared first.
+    4. A flat or room TraceSmart does not list, in a building it does list
+       with no flats at all: the building (:func:`_by_building`).
+    5. A tie on all of that between different addresses is ambiguous -> error.
        Never a guess.
 
     Raises
@@ -125,8 +159,12 @@ def match_address_link(house: str, links: list, street: str = "") -> tuple:
     NoAddressMatchError
         Zero matches found, or an ambiguous tie.
     """
-    config_house = _normalise_house(house)
+    config_house = _normalise_house(house or "")
     street_words = _words(street) - _words(config_house)
+
+    # ⚠️ No house skips steps 1-2: an empty house "matches" every link there.
+    if not config_house:
+        return _whole_address_or_raise(house, links, street)
 
     def street_score(link):
         return len(street_words & _words(link["text"]))
@@ -148,9 +186,99 @@ def match_address_link(house: str, links: list, street: str = "") -> tuple:
         if _link_house_matches_config(config_house, link_house)
     ]
     if not candidates:
-        available = [lnk["text"] for lnk in links]
-        raise NoAddressMatchError(
-            f"Could not find '{house}' in address list. "
-            f"Available options: {available}"
-        )
+        return _whole_address_or_raise(house, links, street)
     return _pick(house, links, candidates)
+
+
+#: Words that make the case's house PART of a building -- a flat, a room.
+#: TraceSmart (Royal Mail's list) often holds the building and not its parts.
+_SUB_PREMISE = {"FLAT", "ROOM", "STUDIO", "BEDSIT", "MAISONETTE", "ANNEXE", "UNIT"}
+
+#: The last word of a street -- a building that is only a street ("Main Road")
+#: is no building. Mirrors CAT's `platform/scrapers.py :: _STREET_WORDS`.
+_STREET_WORDS = {
+    "ROAD", "RD", "STREET", "ST", "LANE", "LN", "AVENUE", "AVE", "DRIVE", "DR",
+    "CLOSE", "CRESCENT", "WAY", "GROVE", "PLACE", "TERRACE", "GARDENS",
+    "SQUARE", "MEWS", "PARADE", "WALK", "ROW",
+}
+
+
+def _tokens(text: str) -> tuple:
+    """The words of one address part, normalised: "St. Patricks Road" ->
+    ("ST", "PATRICKS", "ROAD"); "Apartment 7" -> ("FLAT", "7")."""
+    return tuple(re.findall(r"[A-Z0-9]+", _normalise_house(text or "")))
+
+
+def _parts(text: str) -> list:
+    return [t for t in (_tokens(p) for p in (text or "").split(",")) if t]
+
+
+def _by_building(house: str, links: list, street: str) -> list:
+    """Step 4: the case's FLAT or ROOM is not listed, but its BUILDING is.
+
+    ⚠️ WHY (2026-11-10). 9 of staging's 74 failed IDU runs gave a flat or room
+    TraceSmart does not hold, at a building it does: "Room 5, 14 Angel Place"
+    (only "14 ANGEL PLACE"), "Flat C, 138 Merton Road" (only "138 MERTON
+    ROAD"), "Flat 65, Bagshot Manor, 1 Green Lane" (only "BAGSHOT MANOR, 1
+    GREEN LANE"). That building IS the client's postal address without the
+    flat -- not a neighbour's. Agreed with the user 2026-11-10.
+
+    A link is the building only if ALL hold, so it is never a guess:
+      - the case's house is a part of a building (`_SUB_PREMISE`: "Flat 7",
+        "Room 5", "Bottom Flat") -- a plain house never falls back;
+      - the link BEGINS with the case's whole street, part for part ("14 ANGEL
+        PLACE, WORCESTER" for "14 Angel Place"; "THE ANGEL, 14 ANGEL PLACE"
+        does not, nor "3 TRESMERE COURT, VICTORIA ROAD" for "3 Victoria Road");
+      - that street names a building -- a number, or a name that is not a
+        street ("Main Road" alone picks nothing);
+      - TraceSmart lists NO flat, room or unit in that building. If it lists
+        some and not the case's, the case's flat is wrong -- an error, as
+        before ("Flat 7" never falls back to a block holding FLAT 17 and 70).
+    """
+    if not (set(_tokens(house)) & _SUB_PREMISE):
+        return []
+    building = _parts(street)
+    if not building:
+        return []
+    first = building[0]
+    if not any(t[0].isdigit() for t in first) and first[-1] in _STREET_WORDS:
+        return []
+    n = len(building)
+    ranked = []
+    for idx, link in enumerate(links):
+        parts = _parts(link["text"])
+        if parts[:n] == building:
+            ranked.append((-len(parts), idx, link))
+        # A part of this building listed under it -> its flats are known.
+        elif any(parts[i:i + n] == building and set(parts[i - 1]) & _SUB_PREMISE
+                 for i in range(1, len(parts) - n + 1)):
+            return []
+    return ranked
+
+
+def _whole_address_or_raise(house: str, links: list, street: str) -> tuple:
+    """Step 3, step 4, or the error naming what TraceSmart offered -- the
+    advisor fixes the House No/Name from it and re-runs."""
+    ranked = _by_whole_address(house or "", links, street or "")
+    if ranked:
+        return _pick(house or street, links, ranked)
+    ranked = _by_building(house or "", links, street or "")
+    if ranked:
+        # The same building listed twice ("6 CENTRIC CLOSE, OVAL ROAD, LONDON"
+        # and "6 CENTRIC CLOSE, LONDON") is one address: the shortest is taken.
+        ranked.sort(key=lambda r: (r[0], -r[1]), reverse=True)
+        _, idx, link = ranked[0]
+        logger.warning("IDU address: %r is not listed at the postcode; its building "
+                       "%r is picked", house, link["text"])
+        return idx, link
+    available = [lnk["text"] for lnk in links]
+    if not (house or "").strip():
+        raise NoAddressMatchError(
+            f"No house number or name was given, and the address '{street}' "
+            f"does not single out one address at the postcode. Enter the "
+            f"House No/Name and re-run. Available options: {available}"
+        )
+    raise NoAddressMatchError(
+        f"Could not find '{house}' in address list. "
+        f"Available options: {available}"
+    )
