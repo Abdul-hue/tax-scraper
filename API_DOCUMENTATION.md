@@ -393,9 +393,16 @@ GET /api/scrapers/idu/result/<session_id>
   - `postcode` (`str`, default `""`)
   - `order_register` (`bool`, default `true`)
   - `order_title_plan` (`bool`, default `true`)
+  - `method` (`str`, default `"portal"`): `portal` = browser automation of the HMLR portal; `gateway` = HMLR Business Gateway API (client certificate; `username`/`password` are ignored, credentials come from `LR_BG_*` / `LAND_REGISTRY_*` in `.env`)
 - **Lookup behavior:**
   - You can search directly by `title_number`.
   - If `title_number` is blank, the scraper uses the address fields.
+- **Business Gateway extras** (`method=gateway` only; same response keys as below, plus):
+  - `source`: `"business_gateway"`; `bg_env`: `"test"` (bgtest stub, sample data) or `"live"`
+  - `title_matches`: list of `{title_number, tenure, address, ...}`. If more than one, `error` says so and no copies are ordered; call again with the chosen `title_number`.
+  - `pending`: `null`, or `{service, message_id, message, expected_response, hmlr_reference}` when Land Registry queued the request (out of hours / manual processing / paper by post). Collect it with the poll endpoint below.
+  - `price` (actual fee, GBP) and `hmlr_reference`
+- **Poll a queued Business Gateway request:** `GET /scrapers/landregistry/poll?service=epd|oc1&message_id=...&customer_reference=...&title_number=...&order_register=true&order_title_plan=true`. Returns the same shape as above.
 - **Success response:**
   ```json
   {

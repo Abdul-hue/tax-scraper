@@ -379,6 +379,20 @@ async def run_landregistry_scraper(
         }
 
 
+async def run_landregistry_bg(**kwargs) -> dict:
+    """Land Registry via Business Gateway (official SOAP API) instead of the browser portal."""
+    from scrapers.landregistry_bg import service as bg_service
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: bg_service.order(**kwargs))
+
+
+async def run_landregistry_bg_poll(**kwargs) -> dict:
+    """Collect a queued Business Gateway response using its original message ID."""
+    from scrapers.landregistry_bg import service as bg_service
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: bg_service.poll(**kwargs))
+
+
 async def run_eiir_scraper(
     forename: str,
     surname: str,

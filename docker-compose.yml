@@ -21,6 +21,10 @@ services:
       - scraper_chrome_profile:/app/chrome_profile
       - scraper_output:/app/output
       - scraper_downloads:/app/downloads
+      # Land Registry Business Gateway client certificate (kept out of the image).
+      # Lives OUTSIDE the deploy folder because deploy.sh wipes that folder on every deploy:
+      # on the server this is ~/lr-bg-certs (client.crt.pem, client.key.pem, lr_ca_bundle.pem).
+      - ../lr-bg-certs:/app/certs:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3412/"]

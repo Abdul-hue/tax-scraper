@@ -32,7 +32,7 @@ def _clean_b_body(raw: str) -> str:
     """Remove page-break artefacts that Land Registry injects into the B register."""
     s = re.sub(r"\d+ of \d+", "", raw)
     s = re.sub(r"Title number [A-Z0-9]+", "", s)
-    s = re.sub(r"B: Proprietorship Register continued", "", s)
+    s = re.sub(r"B: Proprietorship Register continued", "", s, flags=re.IGNORECASE)
     return s
 
 
@@ -40,10 +40,12 @@ def _clean_b_body(raw: str) -> str:
 
 def _split_sections(text: str):
     """Return (a_body, b_body, c_body) raw strings."""
-    a_m = re.search(r"A: Property Register", text)
-    b_m = re.search(r"B: Proprietorship Register", text)
-    c_m = re.search(r"C: Charges Register", text)
-    end_m = re.search(r"End of register", text)
+    # Case-insensitive: some official copies (e.g. via Business Gateway) use
+    # "A: Property register" rather than "A: Property Register".
+    a_m = re.search(r"A: Property Register", text, re.IGNORECASE)
+    b_m = re.search(r"B: Proprietorship Register", text, re.IGNORECASE)
+    c_m = re.search(r"C: Charges Register", text, re.IGNORECASE)
+    end_m = re.search(r"End of register", text, re.IGNORECASE)
 
     if not (a_m and b_m and c_m):
         return "", "", ""

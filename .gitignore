@@ -23,3 +23,10 @@ dist/
 *.log
 *proxies.txt
 backend/scrapers/scraper_output/
+
+# Land Registry Business Gateway client certificates / private keys
+backend/certs/
+*.pfx
+*.p12
+*.pem
+*.key

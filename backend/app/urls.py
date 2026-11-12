@@ -185,7 +185,25 @@ async def landregistry_scraper(
     postcode: str = "",
     order_register: bool = True,
     order_title_plan: bool = True,
+    method: str = "portal",
 ):
+    """method=portal: browser automation of the HMLR portal (default).
+    method=gateway: HMLR Business Gateway API (client certificate, see LR_BG_* in .env)."""
+    if method == "gateway":
+        from app.scrapers.service import run_landregistry_bg
+        result = await run_landregistry_bg(
+            customer_reference=customer_reference,
+            title_number=title_number,
+            flat=flat,
+            house=house,
+            street=street,
+            town=town,
+            postcode=postcode,
+            order_register=order_register,
+            order_title_plan=order_title_plan,
+        )
+        return scraper_response(result)
+
     result = await run_landregistry_scraper(
         username=username,
         password=password,
@@ -196,6 +214,28 @@ async def landregistry_scraper(
         street=street,
         town=town,
         postcode=postcode,
+        order_register=order_register,
+        order_title_plan=order_title_plan,
+    )
+    return scraper_response(result)
+
+
+@api_router.get("/scrapers/landregistry/poll", tags=["scrapers"])
+async def landregistry_bg_poll(
+    service: str,
+    message_id: str,
+    customer_reference: str,
+    title_number: str = "",
+    order_register: bool = True,
+    order_title_plan: bool = True,
+):
+    """Collect a queued Business Gateway response (service=epd or oc1) by its message ID."""
+    from app.scrapers.service import run_landregistry_bg_poll
+    result = await run_landregistry_bg_poll(
+        service=service,
+        message_id=message_id,
+        customer_reference=customer_reference,
+        title_number=title_number,
         order_register=order_register,
         order_title_plan=order_title_plan,
     )

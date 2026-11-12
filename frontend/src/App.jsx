@@ -37,7 +37,8 @@ function App() {
     const [lrData, setLrData] = useState({
         customer_reference: '', title_number: '',
         flat: '', house: '', street: '', town: '', postcode: '',
-        order_register: true, order_title_plan: true
+        order_register: true, order_title_plan: true,
+        method: 'portal', // 'portal' = browser automation, 'gateway' = HMLR Business Gateway API
     })
     const updateLrData = (key, value) => setLrData(prev => ({ ...prev, [key]: value }))
 
@@ -316,6 +317,38 @@ function App() {
             setLoading(false)
         }
     }
+
+    // Land Registry via Business Gateway: re-run with a chosen title, or collect a queued response
+    const runLandRegistry = async (path, params) => {
+        setLoading(true)
+        setScrapeError('')
+        try {
+            const qs = new URLSearchParams({ ...params, _t: Date.now() }).toString()
+            const response = await axios.get(`${path}?${qs}`, {
+                headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache', 'Expires': '0' },
+                timeout: 120000
+            })
+            setResult(response.data)
+        } catch (err) {
+            setScrapeError(err.response?.data?.detail || err.message || 'Request failed')
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const chooseLrTitle = (titleNumber) => {
+        updateLrData('title_number', titleNumber)
+        runLandRegistry('/api/scrapers/landregistry', { ...lrData, title_number: titleNumber, method: 'gateway' })
+    }
+
+    const pollLandRegistry = (pending) => runLandRegistry('/api/scrapers/landregistry/poll', {
+        service: pending.service,
+        message_id: pending.message_id,
+        customer_reference: result?.customer_reference || lrData.customer_reference,
+        title_number: result?.title_number || lrData.title_number,
+        order_register: lrData.order_register,
+        order_title_plan: lrData.order_title_plan,
+    })
 
     const updateTaxData = (key, value) => setTaxData(prev => ({ ...prev, [key]: value }))
 
@@ -766,8 +799,30 @@ function App() {
                     {activeTab === 'landregistry' && (
                         <div className="form-grid">
                             <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                                <label>Customer Reference</label>
-                                <input type="text" className="input-field" value={lrData.customer_reference} onChange={e => updateLrData('customer_reference', e.target.value)} />
+                                <label>Method</label>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    {[['portal', 'Portal (browser)'], ['gateway', 'Business Gateway (API)']].map(([value, label]) => (
+                                        <button type="button" key={value} className="input-field"
+                                            onClick={() => updateLrData('method', value)}
+                                            style={{
+                                                flex: 1, cursor: 'pointer',
+                                                fontWeight: lrData.method === value ? 600 : 400,
+                                                borderColor: lrData.method === value ? '#58a6ff' : undefined,
+                                                color: lrData.method === value ? '#58a6ff' : undefined,
+                                            }}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                {lrData.method === 'gateway' && (
+                                    <p style={{ marginTop: 6, fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+                                        Official HM Land Registry API, no browser. Live orders are charged (£7 per document).
+                                    </p>
+                                )}
+                            </div>
+                            <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                                <label>Customer Reference *</label>
+                                <input type="text" className="input-field" required maxLength={25} placeholder="e.g. TEST-001" value={lrData.customer_reference} onChange={e => updateLrData('customer_reference', e.target.value)} />
                             </div>
                             <div className="form-group" style={{ gridColumn: 'span 2' }}>
                                 <label>Title Number</label>
@@ -1562,9 +1617,74 @@ function App() {
                                     <p style={{ color: '#8b949e', fontSize: '0.85rem', marginTop: 8 }}>{result.address}</p>
                                     <p style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tenure: {result.tenure}</p>
                                     <p style={{ color: '#8b949e', fontSize: '0.85rem' }}>Ref: {result.customer_reference}</p>
+                                    {result.source === 'business_gateway' && (
+                                        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', fontSize: '0.8rem' }}>
+                                            <span style={{
+                                                padding: '2px 8px', borderRadius: 4, fontWeight: 'bold',
+                                                background: result.bg_env === 'live' ? 'rgba(86,211,100,0.15)' : 'rgba(246,185,59,0.15)',
+                                                color: result.bg_env === 'live' ? '#56d364' : '#f6b93b',
+                                            }}>
+                                                Business Gateway · {(result.bg_env || '').toUpperCase()}{result.bg_env === 'test' ? ' (sample data)' : ''}
+                                            </span>
+                                            {result.price && <span style={{ color: '#8b949e' }}>Fee: £{result.price}</span>}
+                                            {result.hmlr_reference && <span style={{ color: '#8b949e' }}>HMLR ref: {result.hmlr_reference}</span>}
+                                        </div>
+                                    )}
+                                    {(result.register_local_path || result.title_plan_local_path) && (
+                                        <div style={{ marginTop: 10, display: 'flex', gap: 16, fontSize: '0.85rem' }}>
+                                            {result.register_local_path && (
+                                                <a href={result.register_local_path} target="_blank" rel="noreferrer" style={{ color: '#9646ff' }}>Register PDF ↗</a>
+                                            )}
+                                            {result.title_plan_local_path && (
+                                                <a href={result.title_plan_local_path} target="_blank" rel="noreferrer" style={{ color: '#9646ff' }}>Title Plan PDF ↗</a>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
 
                                 {result.error && <p style={{ color: '#ff4444', padding: 10 }}>{result.error}</p>}
+
+                                {/* Business Gateway: several titles matched the address */}
+                                {result.title_matches?.length > 1 && (
+                                    <div style={{ marginBottom: 20 }}>
+                                        <table>
+                                            <tbody>
+                                                {result.title_matches.map((m) => (
+                                                    <tr key={m.title_number}>
+                                                        <td style={{ fontWeight: 'bold', color: '#58a6ff', paddingRight: 16 }}>{m.title_number}</td>
+                                                        <td style={{ fontSize: '0.85rem' }}>{m.address}</td>
+                                                        <td style={{ fontSize: '0.8rem', color: '#8b949e', paddingRight: 16 }}>{m.tenure}</td>
+                                                        <td>
+                                                            <button type="button" className="input-field" disabled={loading}
+                                                                style={{ cursor: 'pointer', padding: '4px 10px', width: 'auto' }}
+                                                                onClick={() => chooseLrTitle(m.title_number)}>
+                                                                {lrData.order_register || lrData.order_title_plan ? 'Order copies' : 'Use this title'}
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+
+                                {/* Business Gateway: request queued (out of hours / manual processing / sent by post) */}
+                                {result.pending && (
+                                    <div style={{ marginBottom: 20, padding: '12px 14px', background: 'rgba(246,185,59,0.08)', borderLeft: '3px solid #f6b93b', borderRadius: 4, fontSize: '0.85rem' }}>
+                                        <p style={{ color: '#f6b93b', fontWeight: 'bold', marginBottom: 4 }}>Queued by Land Registry</p>
+                                        <p style={{ color: '#8b949e' }}>{result.pending.message}</p>
+                                        {result.pending.expected_response && (
+                                            <p style={{ color: '#8b949e' }}>Expected: {new Date(result.pending.expected_response).toLocaleString()}</p>
+                                        )}
+                                        {result.pending.hmlr_reference && <p style={{ color: '#8b949e' }}>HMLR ref: {result.pending.hmlr_reference}</p>}
+                                        <p style={{ color: '#8b949e', fontSize: '0.75rem', marginTop: 4 }}>Message ID: {result.pending.message_id}</p>
+                                        <button type="button" className="input-field" disabled={loading}
+                                            style={{ marginTop: 10, cursor: 'pointer', width: 'auto', padding: '6px 14px' }}
+                                            onClick={() => pollLandRegistry(result.pending)}>
+                                            {loading ? 'Checking…' : 'Check again'}
+                                        </button>
+                                    </div>
+                                )}
 
                                 {/* A Register */}
                                 {result.register_data?.a_register && (
@@ -1649,7 +1769,7 @@ function App() {
                                 )}
 
                                 {/* Title Plan */}
-                                {result.title_plan_data && (
+                                {(result.title_plan_local_path || Object.keys(result.title_plan_data || {}).length > 0) && (
                                     <div style={{ marginBottom: 24 }}>
                                         <p style={{ color: '#58a6ff', fontWeight: 'bold', marginBottom: 10, fontSize: '0.95rem' }}>
                                             Title Plan

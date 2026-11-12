@@ -1,0 +1,79 @@
+<?xml version='1.0' encoding='UTF-8'?><definitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://poll.epdv2_0.ws.bg.lr.gov/" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns="http://schemas.xmlsoap.org/wsdl/" name="EnquiryByPropertyDescriptionV2_0PollWebService" targetNamespace="http://poll.epdv2_0.ws.bg.lr.gov/">
+  <types>
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://poll.epdv2_0.ws.bg.lr.gov/" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:ns3="http://poll.epdv2_0.ws.bg.lr.gov/" xmlns:ns2="http://www.oscre.org/ns/eReg-Final/2011/ResponseSearchByPropertyDescriptionV2_0" xmlns:ns1="http://www.oscre.org/ns/eReg/MR01-20090605/PollRequest" xmlns="http://schemas.xmlsoap.org/wsdl/" targetNamespace="http://poll.epdv2_0.ws.bg.lr.gov/">
+			
+  <xsd:import namespace="http://www.oscre.org/ns/eReg/MR01-20090605/PollRequest" schemaLocation="https://bgtest.landregistry.gov.uk/b2b/ECBG_StubService/EnquiryByPropertyDescriptionV2_0PollWebService?xsd=PollRequest.xsd"/>
+			
+  <xsd:import namespace="http://www.oscre.org/ns/eReg-Final/2011/ResponseSearchByPropertyDescriptionV2_0" schemaLocation="https://bgtest.landregistry.gov.uk/b2b/ECBG_StubService/EnquiryByPropertyDescriptionV2_0PollWebService?xsd=ResponseSearchByPropertyDescriptionV2_0.xsd"/>
+			
+  <xsd:element name="SOAPEngineSystemException" nillable="true" type="xsd:string"/>
+			
+  <xsd:element name="getResponse" type="ns3:getResponse"/>
+			
+  <xsd:element name="getResponseResponse" type="ns3:getResponseResponse"/>
+			
+  <xsd:complexType name="getResponse">
+				
+    <xsd:sequence>
+					
+      <xsd:element minOccurs="0" name="arg0" type="ns1:PollRequestType"/>
+				
+    </xsd:sequence>
+			
+  </xsd:complexType>
+			
+  <xsd:complexType name="getResponseResponse">
+				
+    <xsd:sequence>
+					
+      <xsd:element minOccurs="0" name="return" type="ns2:ResponseSearchByPropertyDescriptionV2_0Type"/>
+				
+    </xsd:sequence>
+			
+  </xsd:complexType>
+		
+</xsd:schema>
+  </types>
+  <message name="propertyDescriptionPollRequest">
+    <part element="tns:getResponse" name="parameters">
+    </part>
+  </message>
+  <message name="SOAPEngineSystemException">
+    <part element="tns:SOAPEngineSystemException" name="fault">
+    </part>
+  </message>
+  <message name="propertyDescriptionPollResponse">
+    <part element="tns:getResponseResponse" name="parameters">
+    </part>
+  </message>
+  <portType name="PropertyDescriptionEnquiryV2_0PollService">
+    <operation name="getResponse">
+      <input message="tns:propertyDescriptionPollRequest">
+    </input>
+      <output message="tns:propertyDescriptionPollResponse">
+    </output>
+      <fault message="tns:SOAPEngineSystemException" name="SOAPEngineSystemException">
+    </fault>
+    </operation>
+  </portType>
+  <binding name="PropertyDescriptionEnquiryV2_0PollRequestWSImplPortBinding" type="tns:PropertyDescriptionEnquiryV2_0PollService">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="getResponse">
+      <soap:operation soapAction=""/>
+      <input>
+        <soap:body use="literal"/>
+      </input>
+      <output>
+        <soap:body use="literal"/>
+      </output>
+      <fault name="SOAPEngineSystemException">
+        <soap:fault name="SOAPEngineSystemException" use="literal"/>
+      </fault>
+    </operation>
+  </binding>
+  <service name="EnquiryByPropertyDescriptionV2_0PollWebService">
+    <port binding="tns:PropertyDescriptionEnquiryV2_0PollRequestWSImplPortBinding" name="PropertyDescriptionEnquiryV2_0PollRequestWSImplPort">
+      <soap:address location="https://bgtest.landregistry.gov.uk/b2b/ECBG_StubService/EnquiryByPropertyDescriptionV2_0PollWebService"/>
+    </port>
+  </service>
+</definitions>

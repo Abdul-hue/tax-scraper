@@ -1,0 +1,6 @@
+# Never bake certificates / private keys into the image; they are mounted at runtime.
+backend/certs/
+**/*.pfx
+**/*.p12
+**/*.pem
+**/*.key
