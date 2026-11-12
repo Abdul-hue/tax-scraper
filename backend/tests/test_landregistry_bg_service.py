@@ -119,6 +119,42 @@ class OrderTests(unittest.TestCase):
         self.assertEqual([], client.epd_calls)
         self.assertEqual("TT12345", client.oc1_calls[0]["title_number"])
 
+    # ── what came back is judged by what it SAYS ────────────────────────
+    def test_a_title_plan_sent_for_a_register_order_is_wrong_document_not_ok(self):
+        """bgtest returned its sample title plan (title DN100) for a register-only
+        order; it used to be saved -- and filed by CAT -- as the register."""
+        plan = {"status": "success", "message_id": "x", "price": "14.00", "hmlr_reference": "",
+                "documents": [{"name": "document.pdf", "content": b"%PDF plan"}], "message": ""}
+        with mock.patch.object(service, "_pdf_text", return_value=(
+                "these are the notes referred to on the following official copy. the electronic "
+                "official copy of the title plan follows this message.")):
+            res = self.order(FakeClient(oc1=plan), title_number="DN100")
+        self.assertEqual(("wrong_document", "oc1"), (res["code"], res["stage"]))
+        self.assertIn("title plan, not the register", res["error"])
+        self.assertEqual("", res["register_url"])
+        self.assertTrue(res["title_plan_url"])               # kept -- it was paid for
+        self.assertEqual("14.00", res["price"])
+
+    def test_a_file_named_as_a_plan_is_a_plan_whatever_was_asked(self):
+        plan = {**oc1_success(), "documents": [{"name": "Title Plan DN100.pdf", "content": b"x"}]}
+        res = self.order(FakeClient(oc1=plan), title_number="DN100")
+        self.assertEqual("wrong_document", res["code"])
+
+    def test_a_register_that_says_so_is_ok(self):
+        reg = {**oc1_success(), "documents": [{"name": "document.pdf", "content": b"%PDF reg"}]}
+        with mock.patch.object(service, "_pdf_text", return_value=(
+                "the electronic official copy of the register follows this message. "
+                "a: property register  b: proprietorship register  c: charges register")):
+            res = self.order(FakeClient(oc1=reg), title_number="DN100")
+        self.assertEqual("ok", res["code"])
+        self.assertTrue(res["register_url"])
+
+    def test_a_file_that_says_nothing_takes_the_requested_type(self):
+        """No text and no telling name: the requested type, as before."""
+        reg = {**oc1_success(), "documents": [{"name": "document.pdf", "content": b"x"}]}
+        res = self.order(FakeClient(oc1=reg), title_number="DN100")
+        self.assertEqual("ok", res["code"])
+
     # ── outcomes that are not a document ────────────────────────────────
     def test_several_titles_are_returned_to_choose_from_and_nothing_is_ordered(self):
         client = FakeClient(epd=epd_success(_title("TT1", "Leasehold"), _title("TT2")))
@@ -263,11 +299,10 @@ class PollTests(unittest.TestCase):
 
     def test_collecting_an_order(self):
         client = FakeClient(oc1=oc1_success())
-        with mock.patch.object(service, "_save_documents") as save:
-            res = service.poll("oc1", "CAT1-OC1", "430142", title_number="TT1", client=client)
+        res = service.poll("oc1", "CAT1-OC1", "430142", title_number="TT1", client=client)
         self.assertEqual("ok", res["code"])
         self.assertEqual({"poll": "CAT1-OC1"}, client.oc1_calls[0])
-        save.assert_called_once()
+        self.assertTrue(res["register_url"])
 
     def test_a_bad_message_id_is_refused(self):
         res = service.poll("oc1", "no spaces allowed", "430142", client=FakeClient())

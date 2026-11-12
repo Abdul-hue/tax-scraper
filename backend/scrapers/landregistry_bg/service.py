@@ -14,6 +14,8 @@ methods alike) plus Business Gateway extras:
   no_title         no title matches the address
   rejected         HMLR rejected the request (`error` has its reason)
   no_document      HMLR accepted the order but returned no electronic copy
+  wrong_document   a register was ordered but the reply held none (e.g. only the title
+                   plan). The order may have been charged; nothing is offered as the register
   invalid          the input cannot be sent (bad postcode, title number, message id)
   transport        no answer from HMLR. If `stage` is "oc1" the ORDER may have been
                    placed and charged: collect it by `message_ids["oc1"]`, never re-order
@@ -189,16 +191,54 @@ def _render_preview(pdf_path: str, title_number: str) -> Optional[str]:
     return f"/api/files/screenshots/{name}"
 
 
+def _pdf_text(content: bytes, pages: int = 2) -> str:
+    """The first pages' text of a PDF, lower-cased; "" when it cannot be read."""
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            return " ".join((p.extract_text() or "") for p in pdf.pages[:pages]).lower()
+    except Exception as e:  # not a PDF, or unreadable -- the name decides then
+        logger.info("Could not read text from a returned document: %s", e)
+        return ""
+
+
+#: What HMLR's covering notes page says follows it, and what each document prints.
+_REGISTER_CUES = ("official copy of the register follows", "a: property register",
+                  "b: proprietorship register", "proprietorship register", "charges register")
+_PLAN_CUES = ("official copy of the title plan follows", "copy of the title plan follows")
+
+
+def _doc_kind(doc: dict) -> str:
+    """"register", "title_plan" or "" -- from what the document SAYS, then its name.
+
+    ⚠️ NEVER FROM WHAT WAS ASKED FOR (2026-11-13). This used to label every file
+    with the requested type whenever only one was requested, so a title plan sent
+    back for a register order (bgtest's sample for title DN100) was saved -- and
+    filed by the caller -- as the register. HMLR's covering notes page names the
+    copy that follows it; a register also prints its A/B/C register headings.
+    """
+    text = _pdf_text(doc.get("content") or b"")
+    if any(cue in text for cue in _PLAN_CUES) and not any(cue in text for cue in _REGISTER_CUES[1:]):
+        return "title_plan"
+    if any(cue in text for cue in _REGISTER_CUES):
+        return "register"
+    name = str(doc.get("name") or "").lower()
+    if "plan" in name:
+        return "title_plan"
+    if "register" in name:
+        return "register"
+    return ""
+
+
 def _save_documents(res: dict, docs: list, title_number: str, register: bool, title_plan: bool) -> None:
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     saved = {}
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     only_one_type = register != title_plan
     for i, doc in enumerate(docs):
-        if only_one_type:
-            kind = "register" if register else "title_plan"
-        else:
-            kind = "title_plan" if "plan" in doc["name"].lower() else "register"
+        # What the file is, by its content; only a file that says nothing either
+        # way takes the type that was asked for.
+        kind = _doc_kind(doc) or (("register" if register else "title_plan") if only_one_type else "register")
         fname = f"BG_{re.sub(r'[^A-Z0-9]', '', title_number)}_{kind}_{ts}{'_' + str(i) if i else ''}.pdf"
         path = os.path.join(DOWNLOAD_DIR, fname)
         with open(path, "wb") as f:
@@ -233,6 +273,14 @@ def _apply_oc1(res: dict, oc: dict, title_number: str, register: bool, title_pla
             return _fail(res, "no_document",
                          oc.get("message") or "Order accepted but no electronic document was returned")
         _save_documents(res, oc["documents"], title_number, register, title_plan)
+        # ⚠️ A REGISTER WAS ORDERED AND NONE CAME BACK -- e.g. only the title
+        # plan. Not "ok": the caller would file the plan as the register. The
+        # plan is still saved (`title_plan_url`); it was paid for.
+        if register and not res["register_local_path"]:
+            return _fail(res, "wrong_document",
+                         "HM Land Registry sent the title plan, not the register"
+                         if res["title_plan_local_path"] else
+                         "HM Land Registry's reply did not contain the register")
         res["code"] = "ok"
         return res
     return _fail(res, "unexpected", f"Unexpected response type {oc.get('type_code')!r}")
