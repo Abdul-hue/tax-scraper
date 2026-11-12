@@ -184,11 +184,18 @@ async def landregistry_scraper(
     town: str = "",
     postcode: str = "",
     order_register: bool = True,
-    order_title_plan: bool = True,
+    order_title_plan: Optional[bool] = None,
     method: str = "portal",
+    message_id: str = "",
 ):
     """method=portal: browser automation of the HMLR portal (default).
-    method=gateway: HMLR Business Gateway API (client certificate, see LR_BG_* in .env)."""
+    method=gateway: HMLR Business Gateway API (client certificate, see LR_BG_* in .env).
+
+    Gateway only: `message_id` (letters, digits, hyphens, max 46) names the order so a
+    reply that never arrived can be collected from /scrapers/landregistry/poll instead of
+    ordering -- and paying -- again. `order_title_plan` defaults to False for the gateway
+    (each copy is a separate fee) and to True for the portal, as before. The reply's
+    `code` / `stage` are documented in scrapers/landregistry_bg/service.py."""
     if method == "gateway":
         from app.scrapers.service import run_landregistry_bg
         result = await run_landregistry_bg(
@@ -200,10 +207,13 @@ async def landregistry_scraper(
             town=town,
             postcode=postcode,
             order_register=order_register,
-            order_title_plan=order_title_plan,
+            order_title_plan=bool(order_title_plan),
+            message_id=message_id,
         )
         return scraper_response(result)
 
+    if order_title_plan is None:
+        order_title_plan = True
     result = await run_landregistry_scraper(
         username=username,
         password=password,
@@ -220,6 +230,14 @@ async def landregistry_scraper(
     return scraper_response(result)
 
 
+@api_router.get("/scrapers/landregistry/result", tags=["scrapers"])
+async def landregistry_bg_result(message_id: str):
+    """The stored outcome of a gateway order placed with `message_id` -- for a caller
+    that gave up waiting. `code` "in_progress" while it runs, "not_found" if unknown."""
+    from scrapers.landregistry_bg.service import stored_result
+    return scraper_response(stored_result(message_id))
+
+
 @api_router.get("/scrapers/landregistry/poll", tags=["scrapers"])
 async def landregistry_bg_poll(
     service: str,
@@ -227,9 +245,12 @@ async def landregistry_bg_poll(
     customer_reference: str,
     title_number: str = "",
     order_register: bool = True,
-    order_title_plan: bool = True,
+    order_title_plan: bool = False,
 ):
-    """Collect a queued Business Gateway response (service=epd or oc1) by its message ID."""
+    """Collect a queued Business Gateway response (service=epd or oc1) by its message ID.
+
+    Collecting costs nothing. ⚠️ An EPD reply naming exactly ONE title goes on to order
+    its copy (a fresh OC1 id, returned in `message_ids`) -- that is the order completing."""
     from app.scrapers.service import run_landregistry_bg_poll
     result = await run_landregistry_bg_poll(
         service=service,

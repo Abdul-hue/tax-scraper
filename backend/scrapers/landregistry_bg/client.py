@@ -49,6 +49,16 @@ class BGError(Exception):
     """Transport error or SOAP fault from Business Gateway."""
 
 
+class BGTransportError(BGError):
+    """No answer from Business Gateway: connection refused, TLS failure, timeout.
+
+    Kept apart from a SOAP fault because it means something different for a PAID
+    order: HMLR may have received the request and charged for it even though we
+    never saw the reply. Callers treat it as "outcome unknown" and collect the
+    reply by MessageID instead of ordering again.
+    """
+
+
 def new_message_id() -> str:
     # Schema: 5-50 chars, [a-zA-Z0-9][a-zA-Z0-9-]*, unique per request.
     return "TIG" + uuid.uuid4().hex
@@ -115,9 +125,14 @@ class BusinessGatewayClient:
         except urllib.error.HTTPError as e:
             raw = e.read()  # SOAP faults arrive as HTTP 500 with a Fault body
             if not raw:
-                raise BGError(f"HTTP {e.code} from {url}") from e
+                raise BGTransportError(f"HTTP {e.code} from {url}") from e
         except urllib.error.URLError as e:
-            raise BGError(f"Could not reach {url}: {e.reason}") from e
+            raise BGTransportError(f"Could not reach {url}: {e.reason}") from e
+        except (TimeoutError, OSError) as e:
+            # A read that times out AFTER the connection opened raises
+            # socket.timeout (TimeoutError), not URLError -- it used to escape as
+            # an unhandled exception and an HTTP 500 to the caller.
+            raise BGTransportError(f"No reply from {url}: {e}") from e
 
         try:
             root = ET.fromstring(raw)
